@@ -21,13 +21,13 @@
 
     // ========== API 预设 ==========
     const PRESETS = {
-        openai:    { url: 'api.openai.com/v1/chat/completions',           prefix: 'https://', model: 'gpt-4o-mini' },
-        openrouter:{ url: 'openrouter.ai/api/v1/chat/completions',        prefix: 'https://', model: 'openai/gpt-4o-mini' },
-        deepseek:  { url: 'api.deepseek.com/v1/chat/completions',         prefix: 'https://', model: 'deepseek-chat' },
-        moonshot:  { url: 'api.moonshot.cn/v1/chat/completions',          prefix: 'https://', model: 'moonshot-v1-8k' },
-        glm:       { url: 'open.bigmodel.cn/api/paas/v4/chat/completions',prefix: 'https://', model: 'glm-4-flash' },
-        ollama:    { url: '127.0.0.1:11434/v1/chat/completions',          prefix: 'http://',  model: 'qwen2.5:7b' },
-        custom:    { url: '', prefix: 'https://', model: '' }
+        openai: { url: 'api.openai.com/v1/chat/completions', prefix: 'https://', model: 'gpt-4o-mini' },
+        openrouter: { url: 'openrouter.ai/api/v1/chat/completions', prefix: 'https://', model: 'openai/gpt-4o-mini' },
+        deepseek: { url: 'api.deepseek.com/v1/chat/completions', prefix: 'https://', model: 'deepseek-chat' },
+        moonshot: { url: 'api.moonshot.cn/v1/chat/completions', prefix: 'https://', model: 'moonshot-v1-8k' },
+        glm: { url: 'open.bigmodel.cn/api/paas/v4/chat/completions', prefix: 'https://', model: 'glm-4-flash' },
+        ollama: { url: '127.0.0.1:11434/v1/chat/completions', prefix: 'http://', model: 'qwen2.5:7b' },
+        custom: { url: '', prefix: 'https://', model: '' }
     };
 
     // ========== 全局状态 ==========
@@ -40,21 +40,36 @@
 
     // ========== 工具 ==========
 
+    let _cachedCtx = null;
+
     function getContext() {
+        if (_cachedCtx) return _cachedCtx;
+
         if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
-            return SillyTavern.getContext();
+            _cachedCtx = SillyTavern.getContext();
+        } else {
+            _cachedCtx = {
+                extensionSettings: window.extension_settings || {},
+                chat: window.chat || [],
+                characters: window.characters || [],
+                this_chid: window.this_chid,
+                eventSource: window.eventSource,
+                name1: window.name1 || 'User',
+                name2: window.name2 || 'Character',
+                chat_metadata: window.chat_metadata || {},
+                saveSettingsDebounced: window.saveSettingsDebounced || function () { }
+            };
         }
-        return {
-            extensionSettings: window.extension_settings || {},
-            chat: window.chat || [],
-            characters: window.characters || [],
-            this_chid: window.this_chid,
-            eventSource: window.eventSource,
-            name1: window.name1 || 'User',
-            name2: window.name2 || 'Character',
-            chat_metadata: window.chat_metadata || {},
-            saveSettingsDebounced: window.saveSettingsDebounced || function () {}
-        };
+
+        // 确保关键字段始终存在
+        if (!_cachedCtx.chat_metadata) {
+            _cachedCtx.chat_metadata = {};
+        }
+        if (!_cachedCtx.chat_metadata.auto_summaries) {
+            _cachedCtx.chat_metadata.auto_summaries = [];
+        }
+
+        return _cachedCtx;
     }
 
     function log(...a) { console.log(LOG_PREFIX, ...a); }
@@ -120,23 +135,21 @@
     /** 获取已总结到的最大消息索引 */
     function getLastSummarizedIndex() {
         const ctx = getContext();
-        const summaries = (ctx.chat_metadata || {}).auto_summaries || [];
+        const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
         if (summaries.length === 0) return -1;
         const last = summaries[summaries.length - 1];
         return (last.endIndex !== undefined) ? last.endIndex : -1;
     }
 
-    /** 更新楼层统计显示 */
     function updateStats() {
         const ctx = getContext();
         const chat = ctx.chat || [];
-        const summaries = (ctx.chat_metadata || {}).auto_summaries || [];
+        const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
 
         const totalMsg = chat.length;
         const realIndices = getRealMessageIndices();
         const totalReal = realIndices.length;
 
-        // 计算已总结的真实消息数
         let summarizedReal = 0;
         for (const s of summaries) {
             summarizedReal += (s.messageRange || 0);
@@ -152,11 +165,9 @@
         $('#as_progress_fill').css('width', percent + '%');
         $('#as_progress_text').text(percent + '% 已总结');
 
-        // 更新世界书信息
         updateWorldBookInfo();
-
-        log(`统计: 总${totalReal} | 已总结${summarizedReal} | 未总结${unsavedReal} | 记录${recordCount}`);
     }
+
 
     function updateWorldBookInfo() {
         const charName = getCharacterName();
@@ -757,10 +768,11 @@
         return STYLE_PROMPTS[config.style] || STYLE_PROMPTS.normal;
     }
 
+
     function getLastSummary() {
         const ctx = getContext();
-        const s = (ctx.chat_metadata || {}).auto_summaries || [];
-        return s.length > 0 ? s[s.length - 1] : null;
+        const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
+        return summaries.length > 0 ? summaries[summaries.length - 1] : null;
     }
 
     // ========== 世界书 ==========
@@ -892,6 +904,8 @@
 
     async function saveSummary(text, startIdx, endIdx) {
         const ctx = getContext();
+
+        // 双重保险初始化
         if (!ctx.chat_metadata) ctx.chat_metadata = {};
         if (!ctx.chat_metadata.auto_summaries) ctx.chat_metadata.auto_summaries = [];
 
@@ -920,6 +934,7 @@
             logWarn('保存元数据失败:', e);
         }
     }
+
 
     // ========== 执行总结 ==========
 
@@ -1021,7 +1036,7 @@
                         }, 500);
                     });
                     log('绑定:', evt);
-                } catch (e) {}
+                } catch (e) { }
             }
             for (const evt of ['chatLoaded', 'CHAT_CHANGED', 'chatChanged']) {
                 try {
@@ -1034,7 +1049,7 @@
                         }, 1000);
                     });
                     log('绑定:', evt);
-                } catch (e) {}
+                } catch (e) { }
             }
             eventBound = true;
         } else {
@@ -1141,9 +1156,10 @@
 
         $('#as_clear_summaries').on('click', async function () {
             if (!confirm('确定清除所有总结？此操作不可撤销。')) return;
-            if (ctx.chat_metadata) {
-                ctx.chat_metadata.auto_summaries = [];
-                if (typeof ctx.saveMetadata === 'function') await ctx.saveMetadata();
+            const ctx2 = getContext();
+            if (ctx2.chat_metadata) {
+                ctx2.chat_metadata.auto_summaries = [];
+                if (typeof ctx2.saveMetadata === 'function') await ctx2.saveMetadata();
             }
             modal.remove();
             updateStats();
