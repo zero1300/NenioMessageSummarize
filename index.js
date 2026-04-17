@@ -793,11 +793,11 @@ window._asDebugWorldInfo = function () {
     // ========== 世界书 ==========
 
     /**
-    * 创建世界书条目
-    * 命名: Summary_角色名_日期_序号
-    *
-    * 使用 SillyTavern.getContext().worldinfo 操作世界书
-    */
+ * 创建世界书条目
+ * 命名: Summary_角色名_日期_序号
+ *
+ * 通过 ST 前端 JS 对象直接操作，确保 UI 可见
+ */
     async function createWorldBookEntry(summaryText, summaryIndex) {
         if (!config.worldBookEnabled) return;
 
@@ -807,75 +807,84 @@ window._asDebugWorldInfo = function () {
             const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const seq = String(summaryIndex + 1).padStart(3, '0');
             const entryName = `Summary_${charName}_${date}_${seq}`;
+            const bookName = `AutoSummary_${charName.replace(/\s+/g, '_')}_${date}`;
 
-            // 关键词
+            // 关键词数组
             const keys = [charName, '总结', 'summary'];
             const nameParts = charName.split(/\s+/).filter(p => p.length > 1);
             for (const p of nameParts) {
                 if (!keys.includes(p)) keys.push(p);
             }
 
-            const bookName = `AutoSummary_${charName.replace(/\s+/g, '_')}_${date}`;
+            // ========================================
+            // 获取 eventSource
+            // ========================================
+            let es = ctx.eventSource || (typeof eventSource !== 'undefined' ? eventSource : null);
 
             // ========================================
-            // 第一步：获取世界书对象
+            // 获取世界书数据引用
             // ========================================
-            let worldInfo = null;
+            let wiData = null;
 
-            // 方式 A：从 context.worldinfo 获取
-            if (ctx.worldinfo) {
-                worldInfo = ctx.worldinfo;
-                log('从 context.worldinfo 获取到世界书');
+            // 优先从 context 获取
+            if (ctx.world_info && typeof ctx.world_info === 'object') {
+                wiData = ctx.world_info;
+                log('使用 ctx.world_info');
+            }
+            // 全局 world_info
+            else if (typeof world_info !== 'undefined' && world_info) {
+                wiData = world_info;
+                log('使用全局 world_info');
+            }
+            // 全局 world_info_data
+            else if (typeof world_info_data !== 'undefined' && world_info_data) {
+                wiData = world_info_data;
+                log('使用全局 world_info_data');
             }
 
-            // 方式 B：尝试获取角色绑定的世界书
-            if (!worldInfo) {
-                const charData = ctx.characters?.[ctx.this_chid];
-                if (charData?.data?.extensions?.world) {
-                    const boundBook = charData.data.extensions.world;
-                    // 尝试通过 ST API 获取世界书数据
-                    try {
-                        const resp = await $.ajax({
-                            url: '/api/worldinfo',
-                            type: 'POST',
-                            contentType: 'application/json',
-                            data: JSON.stringify({ name: boundBook }),
-                            timeout: 10000
-                        });
-                        if (resp && resp.entries) {
-                            worldInfo = resp;
-                            log('通过 API 获取世界书:', boundBook);
-                        }
-                    } catch (e) { }
+            // ========================================
+            // 确保世界书存在
+            // ========================================
+            let targetBookName = bookName;
+
+            // 如果 wiData 是按书名索引的对象结构
+            if (wiData && typeof wiData === 'object' && !wiData.entries) {
+                // 检查是否已有同名世界书
+                if (!wiData[bookName]) {
+                    wiData[bookName] = { entries: {} };
+                    log('在 wiData 中创建世界书:', bookName);
+                }
+                targetBookName = bookName;
+            }
+            // 如果 wiData 直接就是某个世界书对象（有 entries）
+            else if (wiData && wiData.entries) {
+                // 直接使用这个对象
+                targetBookName = bookName;
+            }
+
+            // ========================================
+            // 注册到 world_names（关键！UI 读取这个列表）
+            // ========================================
+            if (typeof world_names !== 'undefined' && Array.isArray(world_names)) {
+                if (!world_names.includes(bookName)) {
+                    world_names.push(bookName);
+                    log('已注册到 world_names:', bookName);
                 }
             }
 
-            // 方式 C：全局对象兜底
-            if (!worldInfo && typeof world_info !== 'undefined') {
-                // 取第一个可用的世界书
-                const names = Object.keys(world_info);
-                if (names.length > 0) {
-                    worldInfo = world_info[names[0]];
-                    log('从全局 world_info 获取:', names[0]);
-                }
-            }
-
-            if (!worldInfo) {
-                logWarn('没有找到可用的世界书');
-                setStatus('未找到世界书，请先创建一个世界书（总结已保存）', 'error');
-                return;
-            }
-
             // ========================================
-            // 第二步：创建条目
+            // 构建条目
             // ========================================
-            const entry = {
-                uid: Date.now(),
-                key: keys.join(','),
-                keysecondary: '',
-                comment: entryName,
+            const entryUid = Date.now().toString();
+
+            const newEntry = {
+                uid: entryUid,
+                keys: keys,
+                keysecondary: [],
                 content: `【对话总结 #${seq}】\n${summaryText}`,
+                comment: entryName,
                 constant: false,
+                enabled: true,
                 selective: true,
                 insertion_order: 0,
                 disable: false,
@@ -890,87 +899,188 @@ window._asDebugWorldInfo = function () {
                 addMemo: true,
                 sticky: 0,
                 cooldown: 0,
-                delay: 0,
-                // 兼容字段
-                enabled: true,
-                keys: keys
+                delay: 0
             };
 
             // ========================================
-            // 第三步：添加条目到世界书
+            // 添加条目到世界书
             // ========================================
             let entryAdded = false;
 
-            // 确保 entries 存在
-            if (!worldInfo.entries) {
-                worldInfo.entries = [];
+            // 获取目标 entries 容器
+            let entriesContainer = null;
+
+            if (wiData && wiData[targetBookName] && wiData[targetBookName].entries) {
+                entriesContainer = wiData[targetBookName].entries;
+            } else if (wiData && wiData.entries) {
+                entriesContainer = wiData.entries;
             }
 
-            // entries 可能是数组或对象
-            if (Array.isArray(worldInfo.entries)) {
-                worldInfo.entries.push(entry);
-                entryAdded = true;
-                log('以数组方式添加条目');
-            } else if (typeof worldInfo.entries === 'object') {
-                worldInfo.entries[entry.uid] = entry;
-                entryAdded = true;
-                log('以对象方式添加条目');
+            if (entriesContainer) {
+                if (Array.isArray(entriesContainer)) {
+                    entriesContainer.push(newEntry);
+                    entryAdded = true;
+                    log('条目已添加到数组 entries');
+                } else if (typeof entriesContainer === 'object') {
+                    entriesContainer[entryUid] = newEntry;
+                    entryAdded = true;
+                    log('条目已添加到对象 entries');
+                }
+            }
+
+            if (!entryAdded) {
+                logWarn('无法找到 entries 容器');
+                setStatus('世界书写入失败（总结已保存）', 'error');
+                return;
             }
 
             // ========================================
-            // 第四步：触发更新
+            // 保存到服务器
             // ========================================
-            if (entryAdded) {
-                // 发出世界书更新事件
-                const es = ctx.eventSource;
-                if (es && typeof es.emit === 'function') {
+            try {
+                const resp = await $.ajax({
+                    url: '/api/worldinfo/edit',
+                    type: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({
+                        name: bookName,
+                        data: wiData[bookName] || wiData
+                    }),
+                    timeout: 15000
+                });
+                log('通过 /api/worldinfo/edit 保存成功');
+            } catch (e1) {
+                logWarn('/api/worldinfo/edit 失败:', e1.status);
+                try {
+                    await $.ajax({
+                        url: '/api/worldinfo/save',
+                        type: 'POST',
+                        contentType: 'application/json',
+                        data: JSON.stringify({
+                            name: bookName,
+                            world: wiData[bookName] || wiData
+                        }),
+                        timeout: 15000
+                    });
+                    log('通过 /api/worldinfo/save 保存成功');
+                } catch (e2) {
+                    logWarn('HTTP 保存也失败，尝试内置函数');
+                }
+            }
+
+            // 内置保存函数兜底
+            const saveFnNames = [
+                'saveWorldInfo',
+                'saveWorldInfoData',
+                'saveWorldInfos',
+                'saveSettingsDebounced'
+            ];
+            for (const fnName of saveFnNames) {
+                if (typeof window[fnName] === 'function') {
+                    try {
+                        await window[fnName](bookName);
+                        log(`已调用 ${fnName}`);
+                    } catch (e) { }
+                }
+            }
+
+            // ========================================
+            // 触发 UI 刷新
+            // ========================================
+            if (es) {
+                try {
                     // 尝试多种事件名
                     const eventNames = [
                         'worldinfoUpdated',
-                        'WORLDINFO_UPDATED',
                         'worldInfoUpdated',
-                        'world_updated'
+                        'WORLDINFO_UPDATED',
+                        'WORLD_INFO_UPDATED',
+                        'worldInfoUpdated',
+                        'worldUpdated'
                     ];
                     for (const evtName of eventNames) {
                         try {
-                            es.emit(evtName);
+                            es.emit(evtName, { name: bookName });
                             log('触发事件:', evtName);
                             break;
                         } catch (e) { }
                     }
+                } catch (e) {
+                    logWarn('事件触发失败:', e);
                 }
+            }
 
-                // 同时尝试调用保存函数
-                const saveFns = [
-                    'saveWorldInfo',
-                    'saveWorldInfoData',
-                    'saveSettingsDebounced'
-                ];
-                for (const fnName of saveFns) {
-                    if (typeof window[fnName] === 'function') {
+            // 刷新世界书下拉菜单
+            try {
+                if (typeof updateWorldInfoList === 'function') {
+                    updateWorldInfoList();
+                }
+                if (typeof loadWorldInfo === 'function') {
+                    await loadWorldInfo();
+                }
+                // 刷新角色编辑面板的世界书选择器
+                if (typeof updateWorldInfoSelect === 'function') {
+                    updateWorldInfoSelect();
+                }
+            } catch (e) {
+                logWarn('刷新 UI 失败:', e);
+            }
+
+            // ========================================
+            // 绑定世界书到当前角色
+            // ========================================
+            try {
+                const charData = ctx.characters?.[ctx.this_chid];
+                const currentWorld = charData?.data?.extensions?.world;
+
+                // 如果角色没有绑定世界书，自动绑定
+                if (!currentWorld || !currentWorld.trim()) {
+                    if (charData && charData.data) {
+                        if (!charData.data.extensions) charData.data.extensions = {};
+                        charData.data.extensions.world = bookName;
+                        log('已将世界书绑定到角色:', bookName);
+
+                        // 保存角色数据
                         try {
-                            await window[fnName]();
-                            log('调用保存函数:', fnName);
-                        } catch (e) { }
+                            await $.ajax({
+                                url: '/api/characters/edit',
+                                type: 'POST',
+                                contentType: 'application/json',
+                                data: JSON.stringify({
+                                    avatar: charData.avatar,
+                                    data: charData.data
+                                }),
+                                timeout: 15000
+                            });
+                            log('角色数据已保存');
+                        } catch (e) {
+                            logWarn('保存角色数据失败:', e);
+                        }
                     }
                 }
-
-                // 记录到总结元数据
-                const ctx2 = getContext();
-                const summaries = (ctx2.chat_metadata || {}).auto_summaries || [];
-                if (summaries.length > 0) {
-                    summaries[summaries.length - 1].worldBookName = entryName;
-                    summaries[summaries.length - 1].worldBookFile = bookName;
-                    summaries[summaries.length - 1].worldBookSaved = true;
-                }
-
-                log('世界书条目已创建:', entryName);
+            } catch (e) {
+                logWarn('绑定世界书到角色失败:', e);
             }
+
+            // ========================================
+            // 记录结果
+            // ========================================
+            const ctx2 = getContext();
+            const summaries = (ctx2.chat_metadata || {}).auto_summaries || [];
+            if (summaries.length > 0) {
+                summaries[summaries.length - 1].worldBookName = entryName;
+                summaries[summaries.length - 1].worldBookFile = bookName;
+                summaries[summaries.length - 1].worldBookSaved = entryAdded;
+            }
+
+            log('世界书条目已创建:', entryName, '→', bookName);
+            setStatus('总结完成，世界书已更新！', 'success');
 
         } catch (e) {
             logWarn('世界书操作异常:', e);
         }
     }
+
 
 
 
