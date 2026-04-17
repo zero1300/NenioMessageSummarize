@@ -6,6 +6,37 @@
 
     <div class="as-body" id="as_body">
 
+        <!-- 楼层统计 -->
+        <div class="as-section-title">楼层统计</div>
+        <div class="as-stats" id="as_stats">
+            <div class="as-stat-chip total">
+                <span class="as-stat-value" id="as_stat_total">0</span>
+                <span class="as-stat-label">总消息</span>
+            </div>
+            <div class="as-stat-chip summarized">
+                <span class="as-stat-value" id="as_stat_summarized">0</span>
+                <span class="as-stat-label">已总结</span>
+            </div>
+            <div class="as-stat-chip unsaved">
+                <span class="as-stat-value" id="as_stat_unsaved">0</span>
+                <span class="as-stat-label">未总结</span>
+            </div>
+            <div class="as-stat-chip records">
+                <span class="as-stat-value" id="as_stat_records">0</span>
+                <span class="as-stat-label">总结次数</span>
+            </div>
+        </div>
+
+        <!-- 进度条 -->
+        <div class="as-progress-wrap">
+            <div class="as-progress-bar">
+                <div class="as-progress-fill" id="as_progress_fill" style="width:0%"></div>
+            </div>
+            <div class="as-progress-text" id="as_progress_text">0%</div>
+        </div>
+
+        <hr class="as-divider">
+
         <!-- 启用开关 -->
         <div class="as-toggle-row">
             <label for="as_enabled">启用自动总结</label>
@@ -17,10 +48,9 @@
 
         <hr class="as-divider">
 
-        <!-- ===== API 配置 ===== -->
+        <!-- API 配置 -->
         <div class="as-section-title">API 配置</div>
 
-        <!-- 预设 -->
         <div class="as-control">
             <label>快速预设</label>
             <div class="as-presets" id="as_presets">
@@ -34,7 +64,6 @@
             </div>
         </div>
 
-        <!-- API URL -->
         <div class="as-control">
             <label for="as_api_url">API 地址</label>
             <div class="as-api-url-row">
@@ -43,19 +72,16 @@
             </div>
         </div>
 
-        <!-- API Key -->
         <div class="as-control">
             <label for="as_api_key">API Key</label>
             <input type="password" id="as_api_key" placeholder="sk-xxxxxxxx" spellcheck="false" autocomplete="off">
         </div>
 
-        <!-- 模型 -->
         <div class="as-control">
             <label for="as_model">模型名称</label>
             <input type="text" id="as_model" placeholder="gpt-4o-mini" spellcheck="false">
         </div>
 
-        <!-- 测试连接 -->
         <div class="as-test-row">
             <button id="as_btn_test" style="flex:0 0 auto; padding: 5px 12px;">🔗 测试连接</button>
             <div class="as-test-result" id="as_test_result"></div>
@@ -63,19 +89,17 @@
 
         <hr class="as-divider">
 
-        <!-- ===== 总结配置 ===== -->
+        <!-- 总结配置 -->
         <div class="as-section-title">总结配置</div>
 
-        <!-- 触发频率 -->
         <div class="as-control">
-            <label for="as_frequency">触发频率（每 N 轮对话后总结）</label>
+            <label for="as_frequency">自动触发频率（每 N 轮）</label>
             <div class="as-slider-row">
                 <input type="range" id="as_frequency" min="1" max="50" value="10" step="1">
                 <span class="as-slider-val" id="as_frequency_val">10</span>
             </div>
         </div>
 
-        <!-- 总结风格 -->
         <div class="as-control">
             <label for="as_style">总结风格</label>
             <select id="as_style">
@@ -86,7 +110,6 @@
             </select>
         </div>
 
-        <!-- 最大长度 -->
         <div class="as-control">
             <label for="as_max_tokens">总结最大 Token 数</label>
             <div class="as-slider-row">
@@ -95,7 +118,6 @@
             </div>
         </div>
 
-        <!-- 上下文消息数 -->
         <div class="as-control">
             <label for="as_context_messages">发送给 AI 的最近消息数</label>
             <div class="as-slider-row">
@@ -104,16 +126,14 @@
             </div>
         </div>
 
-        <!-- 包含之前的总结 -->
         <div class="as-toggle-row">
-            <label for="as_include_prev">在上下文中包含之前的总结</label>
+            <label for="as_include_prev">上下文包含之前的总结</label>
             <div class="as-switch">
                 <input type="checkbox" id="as_include_prev" checked>
                 <span class="slider"></span>
             </div>
         </div>
 
-        <!-- 自定义提示词 -->
         <div class="as-control" id="as_custom_prompt_wrap" style="display:none;">
             <label for="as_custom_prompt">自定义系统提示词</label>
             <textarea id="as_custom_prompt" rows="3"
@@ -122,14 +142,60 @@
 
         <hr class="as-divider">
 
-        <!-- 操作按钮 -->
-        <div class="as-buttons">
-            <button id="as_btn_summarize" title="立即总结当前对话">⚡ 立即总结</button>
-            <button id="as_btn_history" title="查看历史总结">📋 历史记录</button>
-            <button id="as_btn_reset" title="重置计数器">🔄 重置计数</button>
+        <!-- 世界书配置 -->
+        <div class="as-section-title">世界书设置</div>
+
+        <div class="as-toggle-row">
+            <label for="as_wb_enabled">写入世界书</label>
+            <div class="as-switch">
+                <input type="checkbox" id="as_wb_enabled" checked>
+                <span class="slider"></span>
+            </div>
         </div>
 
-        <!-- 状态栏 -->
+        <div class="as-wb-info" id="as_wb_info">
+            命名格式: Summary_角色名_日期_序号
+        </div>
+
+        <hr class="as-divider">
+
+        <!-- 操作按钮 -->
+        <div class="as-buttons" id="as_action_buttons">
+            <button id="as_btn_summarize" class="as-btn-primary" title="立即总结当前对话">⚡ 立即总结</button>
+            <button id="as_btn_history" title="查看历史总结">📋 历史记录</button>
+            <button id="as_btn_reset" title="重置计数器">🔄 重置</button>
+        </div>
+
+        <!-- 确认区域（默认隐藏） -->
+        <div class="as-confirm-section" id="as_confirm_section" style="display:none;">
+            <div class="as-confirm-title">⚡ 确认总结操作</div>
+            <div class="as-confirm-info" id="as_confirm_info"></div>
+
+            <div class="as-control">
+                <label for="as_confirm_range">总结范围（消息索引）</label>
+                <div class="as-slider-row">
+                    <input type="range" id="as_confirm_range" min="0" max="100" value="0" step="1">
+                    <span class="as-slider-val" id="as_confirm_range_val">-</span>
+                </div>
+            </div>
+
+            <div class="as-control">
+                <label for="as_confirm_style">总结风格</label>
+                <select id="as_confirm_style">
+                    <option value="brief">简短</option>
+                    <option value="normal">标准</option>
+                    <option value="detailed">详细</option>
+                    <option value="custom">自定义</option>
+                </select>
+            </div>
+
+            <div class="as-confirm-buttons">
+                <button id="as_btn_confirm_yes" class="as-btn-confirm-execute">✅ 确认总结</button>
+                <button id="as_btn_confirm_no" class="as-btn-confirm-cancel">✖ 取消</button>
+            </div>
+        </div>
+
+        <!-- 计数器 & 状态 -->
         <div class="as-counter" id="as_counter">已计数: 0 / 10 轮</div>
         <div class="as-status" id="as_status"></div>
     </div>
