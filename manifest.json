@@ -1,0 +1,12 @@
+{
+  "name": "Nenio Message Summarize",
+  "display_name": "Nenio 消息自动总结",
+  "version": "1.0.0",
+  "description": "极简版逐条消息自动总结，支持移除原消息节省 token。由 Nenio 定制",
+  "author": "Nenio (based on Qvink idea)",
+  "author_url": "https://github.com/yourusername",
+  "script": "index.js",
+  "settings": "settings.html",
+  "style": "style.css",
+  "version_url": "https://raw.githubusercontent.com/yourusername/NenioMessageSummarize/main/manifest.json"
+}

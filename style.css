@@ -1,0 +1,11 @@
+/* Nenio 总结消息样式 */
+.message[title*="总结"], .mes[title*="总结"] {
+    background-color: #2a2a2e !important;
+    opacity: 0.95;
+    border-left: 4px solid #888;
+}
+
+.message[title*="总结"] .mes_text, .mes[title*="总结"] .mes_text {
+    font-style: italic;
+    color: #ccc;
+}

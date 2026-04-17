@@ -1,0 +1,30 @@
+<div class="extension-settings">
+    <h3>Nenio 消息自动总结 设置</h3>
+
+    <label>
+        <input type="checkbox" id="autoSummarize" checked>
+        启用自动总结
+    </label>
+
+    <label>
+        <input type="checkbox" id="removeOriginal" checked>
+        总结后移除原消息（强烈推荐，节省大量 token）
+    </label>
+
+    <div>
+        <label>总结延迟（消息数）：</label>
+        <input type="number" id="messageLag" value="0" min="0" style="width:80px;">
+        <small>（0 = 立即总结）</small>
+    </div>
+
+    <div>
+        <label>总结 Prompt（支持 {{message}}）：</label><br>
+        <textarea id="summarizePrompt" rows="6" style="width:100%; font-family: monospace;">
+请用简洁的一到两句话总结下面这条消息，保留核心信息、情感和关键细节：
+
+{{message}}
+        </textarea>
+    </div>
+
+    <button id="saveNenioSettings">保存设置</button>
+</div>
