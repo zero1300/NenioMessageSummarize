@@ -170,8 +170,9 @@
 
     function updateCounterDisplay() {
         const el = document.getElementById('as_counter');
-        if (el) el.textContent `已计数: ${messageCounter} / ${config.frequency} 轮`;
+        if (el) el.textContent = `已计数: ${messageCounter} / ${config.frequency} 轮`;
     }
+
 
     // ========== 配置 ==========
 
