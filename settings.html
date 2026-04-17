@@ -1,30 +1,89 @@
-<div class="extension-settings">
-    <h3>Nenio 消息自动总结 设置</h3>
+<div id="auto_summary_panel" class="auto-summary-panel">
+    <h4>
+        <span class="panel-toggle" id="as_panel_toggle">▼</span>
+        📝 自动总结
+    </h4>
 
-    <label>
-        <input type="checkbox" id="autoSummarize" checked>
-        启用自动总结
-    </label>
+    <div class="as-body" id="as_body">
 
-    <label>
-        <input type="checkbox" id="removeOriginal" checked>
-        总结后移除原消息（强烈推荐，节省大量 token）
-    </label>
+        <!-- 启用开关 -->
+        <div class="as-toggle-row">
+            <label for="as_enabled">启用自动总结</label>
+            <div class="as-switch">
+                <input type="checkbox" id="as_enabled" checked>
+                <span class="slider"></span>
+            </div>
+        </div>
 
-    <div>
-        <label>总结延迟（消息数）：</label>
-        <input type="number" id="messageLag" value="0" min="0" style="width:80px;">
-        <small>（0 = 立即总结）</small>
+        <hr class="as-divider">
+
+        <!-- 触发频率 -->
+        <div class="as-control">
+            <label for="as_frequency">触发频率（每 N 轮对话后总结）</label>
+            <div class="as-slider-row">
+                <input type="range" id="as_frequency" min="1" max="50" value="10" step="1">
+                <span class="as-slider-val" id="as_frequency_val">10</span>
+            </div>
+        </div>
+
+        <!-- 总结风格 -->
+        <div class="as-control">
+            <label for="as_style">总结风格</label>
+            <select id="as_style">
+                <option value="brief">简短 — 一句话概括</option>
+                <option value="normal" selected>标准 — 段落式总结</option>
+                <option value="detailed">详细 — 完整情节梳理</option>
+                <option value="custom">自定义提示词</option>
+            </select>
+        </div>
+
+        <!-- 最大长度 -->
+        <div class="as-control">
+            <label for="as_max_tokens">总结最大 Token 数</label>
+            <div class="as-slider-row">
+                <input type="range" id="as_max_tokens" min="50" max="1000" value="300" step="50">
+                <span class="as-slider-val" id="as_max_tokens_val">300</span>
+            </div>
+        </div>
+
+        <!-- 上下文消息数 -->
+        <div class="as-control">
+            <label for="as_context_messages">发送给 AI 的最近消息数</label>
+            <div class="as-slider-row">
+                <input type="range" id="as_context_messages" min="5" max="100" value="30" step="5">
+                <span class="as-slider-val" id="as_context_messages_val">30</span>
+            </div>
+        </div>
+
+        <!-- 包含之前的总结 -->
+        <div class="as-toggle-row">
+            <label for="as_include_prev">在上下文中包含之前的总结</label>
+            <div class="as-switch">
+                <input type="checkbox" id="as_include_prev" checked>
+                <span class="slider"></span>
+            </div>
+        </div>
+
+        <hr class="as-divider">
+
+        <!-- 自定义提示词 -->
+        <div class="as-control" id="as_custom_prompt_wrap" style="display:none;">
+            <label for="as_custom_prompt">自定义系统提示词</label>
+            <textarea id="as_custom_prompt" rows="3"
+                placeholder="例如：请用中文总结以下对话，重点记录角色的情感变化和关键事件。"></textarea>
+        </div>
+
+        <hr class="as-divider">
+
+        <!-- 操作按钮 -->
+        <div class="as-buttons">
+            <button id="as_btn_summarize" title="立即总结当前对话">⚡ 立即总结</button>
+            <button id="as_btn_history" title="查看历史总结">📋 历史记录</button>
+            <button id="as_btn_reset" title="重置计数器">🔄 重置计数</button>
+        </div>
+
+        <!-- 状态栏 -->
+        <div class="as-counter" id="as_counter">已计数: 0 / 10 轮</div>
+        <div class="as-status" id="as_status"></div>
     </div>
-
-    <div>
-        <label>总结 Prompt（支持 {{message}}）：</label><br>
-        <textarea id="summarizePrompt" rows="6" style="width:100%; font-family: monospace;">
-请用简洁的一到两句话总结下面这条消息，保留核心信息、情感和关键细节：
-
-{{message}}
-        </textarea>
-    </div>
-
-    <button id="saveNenioSettings">保存设置</button>
 </div>

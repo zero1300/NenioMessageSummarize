@@ -1,11 +1,12 @@
 {
-  "name": "NenioMessageSummarize",
-  "display_name": "Nenio 消息自动总结",
-  "version": "1.0.1",
-  "description": "极简版逐条消息自动总结，支持移除原消息节省 token",
-  "author": "Nenio",
-  "script": "index.js",
-  "settings": "settings.html",
-  "style": "style.css",
-  "version_url": "https://raw.githubusercontent.com/zero1300/NenioMessageSummarize/main/manifest.json"
+    "display_name": "自动总结",
+    "auto_update": false,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "MiMo",
+    "version": "1.0.0",
+    "homePage": "",
+    "update": ""
 }
