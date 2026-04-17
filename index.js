@@ -1,8 +1,8 @@
 /**
- * Auto Summary Extension for SillyTavern
+ * Auto Summary Extension for SillyTavern v1.1
  *
- * 自动在每 N 轮对话后调用 AI 生成对话总结，
- * 并将总结存储在聊天元数据中，方便后续回顾。
+ * 支持手动配置 API 地址 / Key / 模型
+ * 兼容 OpenAI / OpenRouter / DeepSeek / Moonshot / 智谱 / Ollama 等兼容接口
  */
 (function () {
     'use strict';
@@ -18,20 +18,57 @@
         detailed: '请详细总结以下对话。包括：\n1. 主要情节发展\n2. 角色的行动与决定\n3. 角色间的关系变化\n4. 当前场景与氛围\n5. 重要的未解事项\n只输出总结。'
     };
 
+    // 预设配置
+    const PRESETS = {
+        openai: {
+            url: 'api.openai.com/v1/chat/completions',
+            prefix: 'https://',
+            model: 'gpt-4o-mini'
+        },
+        openrouter: {
+            url: 'openrouter.ai/api/v1/chat/completions',
+            prefix: 'https://',
+            model: 'openai/gpt-4o-mini'
+        },
+        deepseek: {
+            url: 'api.deepseek.com/v1/chat/completions',
+            prefix: 'https://',
+            model: 'deepseek-chat'
+        },
+        moonshot: {
+            url: 'api.moonshot.cn/v1/chat/completions',
+            prefix: 'https://',
+            model: 'moonshot-v1-8k'
+        },
+        glm: {
+            url: 'open.bigmodel.cn/api/paas/v4/chat/completions',
+            prefix: 'https://',
+            model: 'glm-4-flash'
+        },
+        ollama: {
+            url: '127.0.0.1:11434/v1/chat/completions',
+            prefix: 'http://',
+            model: 'qwen2.5:7b'
+        },
+        custom: {
+            url: '',
+            prefix: 'https://',
+            model: ''
+        }
+    };
+
     // ========== 全局状态 ==========
     let config = {};
-    let messageCounter = 0;      // 用户+助手消息计数
-    let isProcessing = false;    // 防止并发
+    let messageCounter = 0;
+    let isProcessing = false;
     let eventBound = false;
 
     // ========== 工具函数 ==========
 
-    /** 获取 SillyTavern 上下文 */
     function getContext() {
         if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
             return SillyTavern.getContext();
         }
-        // 兼容旧版
         return {
             extensionSettings: window.extension_settings || {},
             chat: window.chat || [],
@@ -40,49 +77,50 @@
             eventSource: window.eventSource,
             name1: window.name1 || 'User',
             name2: window.name2 || 'Character',
+            chat_metadata: window.chat_metadata || {},
             saveSettingsDebounced: window.saveSettingsDebounced || function () { }
         };
     }
 
-    /** 日志 */
-    function log(...args) {
-        console.log(LOG_PREFIX, ...args);
-    }
+    function log(...args) { console.log(LOG_PREFIX, ...args); }
+    function logWarn(...args) { console.warn(LOG_PREFIX, ...args); }
 
-    function logWarn(...args) {
-        console.warn(LOG_PREFIX, ...args);
-    }
-
-    /** 显示状态信息 */
     function setStatus(text, type) {
         const el = document.getElementById('as_status');
         if (el) {
             el.textContent = text;
             el.className = 'as-status' + (type ? ' ' + type : '');
         }
-        if (text) {
-            log(text);
+        if (text) log(text);
+    }
+
+    function setTestResult(text, type) {
+        const el = document.getElementById('as_test_result');
+        if (el) {
+            el.textContent = text;
+            el.className = 'as-test-result as-status' + (type ? ' ' + type : '');
         }
     }
 
-    /** 更新计数器显示 */
     function updateCounterDisplay() {
         const el = document.getElementById('as_counter');
-        if (el) {
-            el.textContent = `已计数: ${messageCounter} / ${config.frequency} 轮`;
-        }
+        if (el) el.textContent = `已计数: ${messageCounter} / ${config.frequency} 轮`;
     }
 
-    /** 延迟 */
-    function sleep(ms) {
-        return new Promise(resolve => setTimeout(resolve, ms));
-    }
+    function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
     // ========== 配置管理 ==========
 
     function getDefaultConfig() {
         return {
             enabled: true,
+            // API 配置
+            apiPreset: 'openai',
+            apiPrefix: 'https://',
+            apiUrl: 'api.openai.com/v1/chat/completions',
+            apiKey: '',
+            model: 'gpt-4o-mini',
+            // 总结配置
             frequency: 10,
             style: 'normal',
             customPrompt: '',
@@ -98,22 +136,57 @@
             ctx.extensionSettings[EXT_NAME] = {};
         }
         config = Object.assign(getDefaultConfig(), ctx.extensionSettings[EXT_NAME]);
-        log('配置已加载:', config);
+        log('配置已加载:', { ...config, apiKey: config.apiKey ? '***' : '(空)' });
     }
 
     function saveConfig() {
         const ctx = getContext();
         ctx.extensionSettings[EXT_NAME] = { ...config };
-        if (ctx.saveSettingsDebounced) {
-            ctx.saveSettingsDebounced();
-        }
+        if (ctx.saveSettingsDebounced) ctx.saveSettingsDebounced();
+    }
+
+    /** 从 UI 读取当前表单值到 config */
+    function readUIConfig() {
+        config.enabled = $('#as_enabled').is(':checked');
+        config.apiPrefix = $('#as_url_prefix').text().trim();
+        config.apiUrl = $('#as_api_url').val().trim();
+        config.apiKey = $('#as_api_key').val().trim();
+        config.model = $('#as_model').val().trim();
+        config.frequency = parseInt($('#as_frequency').val()) || 10;
+        config.style = $('#as_style').val();
+        config.customPrompt = $('#as_custom_prompt').val();
+        config.maxTokens = parseInt($('#as_max_tokens').val()) || 300;
+        config.contextMessages = parseInt($('#as_context_messages').val()) || 30;
+        config.includePreviousSummary = $('#as_include_prev').is(':checked');
+    }
+
+    /** 从 config 写入 UI 表单 */
+    function writeUIConfig() {
+        $('#as_enabled').prop('checked', config.enabled);
+        $('#as_url_prefix').text(config.apiPrefix || 'https://');
+        $('#as_api_url').val(config.apiUrl || '');
+        $('#as_api_key').val(config.apiKey || '');
+        $('#as_model').val(config.model || '');
+        $('#as_frequency').val(config.frequency);
+        $('#as_frequency_val').text(config.frequency);
+        $('#as_style').val(config.style);
+        $('#as_custom_prompt_wrap').css('display', config.style === 'custom' ? 'flex' : 'none');
+        $('#as_custom_prompt').val(config.customPrompt || '');
+        $('#as_max_tokens').val(config.maxTokens);
+        $('#as_max_tokens_val').text(config.maxTokens);
+        $('#as_context_messages').val(config.contextMessages);
+        $('#as_context_messages_val').text(config.contextMessages);
+        $('#as_include_prev').prop('checked', config.includePreviousSummary);
+
+        // 高亮预设芯片
+        $('.as-chip').removeClass('active');
+        $(`.as-chip[data-preset="${config.apiPreset}"]`).addClass('active');
     }
 
     // ========== UI 构建 ==========
 
     function buildUI() {
-        // 加载 HTML 模板
-        const settingsHtml = `
+        const html = `
         <div id="auto_summary_panel" class="auto-summary-panel">
             <h4>
                 <span class="panel-toggle" id="as_panel_toggle">▼</span>
@@ -123,11 +196,49 @@
                 <div class="as-toggle-row">
                     <label for="as_enabled">启用自动总结</label>
                     <div class="as-switch">
-                        <input type="checkbox" id="as_enabled" ${config.enabled ? 'checked' : ''}>
+                        <input type="checkbox" id="as_enabled">
                         <span class="slider"></span>
                     </div>
                 </div>
                 <hr class="as-divider">
+
+                <!-- API 配置 -->
+                <div class="as-section-title">API 配置</div>
+                <div class="as-control">
+                    <label>快速预设</label>
+                    <div class="as-presets" id="as_presets">
+                        <button class="as-chip" data-preset="openai">OpenAI</button>
+                        <button class="as-chip" data-preset="openrouter">OpenRouter</button>
+                        <button class="as-chip" data-preset="deepseek">DeepSeek</button>
+                        <button class="as-chip" data-preset="moonshot">Moonshot</button>
+                        <button class="as-chip" data-preset="glm">智谱 GLM</button>
+                        <button class="as-chip" data-preset="ollama">Ollama</button>
+                        <button class="as-chip" data-preset="custom">自定义</button>
+                    </div>
+                </div>
+                <div class="as-control">
+                    <label for="as_api_url">API 地址</label>
+                    <div class="as-api-url-row">
+                        <span class="as-api-url-prefix" id="as_url_prefix">https://</span>
+                        <input type="text" id="as_api_url" placeholder="api.openai.com/v1/chat/completions" spellcheck="false">
+                    </div>
+                </div>
+                <div class="as-control">
+                    <label for="as_api_key">API Key</label>
+                    <input type="password" id="as_api_key" placeholder="sk-xxxxxxxx" spellcheck="false" autocomplete="off">
+                </div>
+                <div class="as-control">
+                    <label for="as_model">模型名称</label>
+                    <input type="text" id="as_model" placeholder="gpt-4o-mini" spellcheck="false">
+                </div>
+                <div class="as-test-row">
+                    <button id="as_btn_test" style="flex:0 0 auto; padding: 5px 12px;">🔗 测试连接</button>
+                    <div class="as-test-result" id="as_test_result"></div>
+                </div>
+                <hr class="as-divider">
+
+                <!-- 总结配置 -->
+                <div class="as-section-title">总结配置</div>
                 <div class="as-control">
                     <label for="as_frequency">触发频率（每 N 轮对话后总结）</label>
                     <div class="as-slider-row">
@@ -138,39 +249,39 @@
                 <div class="as-control">
                     <label for="as_style">总结风格</label>
                     <select id="as_style">
-                        <option value="brief" ${config.style === 'brief' ? 'selected' : ''}>简短 — 一句话概括</option>
-                        <option value="normal" ${config.style === 'normal' ? 'selected' : ''}>标准 — 段落式总结</option>
-                        <option value="detailed" ${config.style === 'detailed' ? 'selected' : ''}>详细 — 完整情节梳理</option>
-                        <option value="custom" ${config.style === 'custom' ? 'selected' : ''}>自定义提示词</option>
+                        <option value="brief">简短 — 一句话概括</option>
+                        <option value="normal" selected>标准 — 段落式总结</option>
+                        <option value="detailed">详细 — 完整情节梳理</option>
+                        <option value="custom">自定义提示词</option>
                     </select>
                 </div>
                 <div class="as-control">
                     <label for="as_max_tokens">总结最大 Token 数</label>
                     <div class="as-slider-row">
-                        <input type="range" id="as_max_tokens" min="50" max="1000" value="${config.maxTokens}" step="50">
+                        <input type="range" id="as_max_tokens" min="50" max="2000" value="${config.maxTokens}" step="50">
                         <span class="as-slider-val" id="as_max_tokens_val">${config.maxTokens}</span>
                     </div>
                 </div>
                 <div class="as-control">
                     <label for="as_context_messages">发送给 AI 的最近消息数</label>
                     <div class="as-slider-row">
-                        <input type="range" id="as_context_messages" min="5" max="100" value="${config.contextMessages}" step="5">
+                        <input type="range" id="as_context_messages" min="5" max="200" value="${config.contextMessages}" step="5">
                         <span class="as-slider-val" id="as_context_messages_val">${config.contextMessages}</span>
                     </div>
                 </div>
                 <div class="as-toggle-row">
                     <label for="as_include_prev">在上下文中包含之前的总结</label>
                     <div class="as-switch">
-                        <input type="checkbox" id="as_include_prev" ${config.includePreviousSummary ? 'checked' : ''}>
+                        <input type="checkbox" id="as_include_prev">
                         <span class="slider"></span>
                     </div>
                 </div>
-                <hr class="as-divider">
-                <div class="as-control" id="as_custom_prompt_wrap" style="display:${config.style === 'custom' ? 'flex' : 'none'}">
+                <div class="as-control" id="as_custom_prompt_wrap" style="display:none;">
                     <label for="as_custom_prompt">自定义系统提示词</label>
-                    <textarea id="as_custom_prompt" rows="3" placeholder="例如：请用中文总结以下对话，重点记录角色的情感变化和关键事件。">${config.customPrompt || ''}</textarea>
+                    <textarea id="as_custom_prompt" rows="3" placeholder="例如：请用中文总结以下对话，重点记录角色的情感变化和关键事件。"></textarea>
                 </div>
                 <hr class="as-divider">
+
                 <div class="as-buttons">
                     <button id="as_btn_summarize" title="立即总结当前对话">⚡ 立即总结</button>
                     <button id="as_btn_history" title="查看历史总结">📋 历史记录</button>
@@ -181,13 +292,14 @@
             </div>
         </div>`;
 
-        // 注入到扩展设置区域
         const container = $('#extensions_settings');
         if (container.length && !$('#auto_summary_panel').length) {
-            container.append(settingsHtml);
+            container.append(html);
             log('UI 已注入');
         }
 
+        // 将 config 写入 UI
+        writeUIConfig();
         bindUIEvents();
     }
 
@@ -204,6 +316,75 @@
             saveConfig();
             setStatus(config.enabled ? '已启用' : '已禁用');
             updateCounterDisplay();
+        });
+
+        // ===== 预设芯片 =====
+        $('#as_presets').on('click', '.as-chip', function () {
+            const preset = $(this).data('preset');
+            const p = PRESETS[preset];
+            if (!p) return;
+
+            config.apiPreset = preset;
+            config.apiPrefix = p.prefix;
+            config.apiUrl = p.url;
+            config.model = p.model;
+            // 不覆盖 apiKey
+
+            $('#as_url_prefix').text(p.prefix);
+            $('#as_api_url').val(p.url);
+            $('#as_model').val(p.model);
+
+            $('.as-chip').removeClass('active');
+            $(this).addClass('active');
+            saveConfig();
+            setTestResult('');
+            log('切换预设:', preset);
+        });
+
+        // API 输入变化
+        $('#as_api_url').on('input', function () {
+            config.apiUrl = this.value.trim();
+            config.apiPreset = 'custom';
+            $('.as-chip').removeClass('active');
+            $('.as-chip[data-preset="custom"]').addClass('active');
+            saveConfig();
+        });
+
+        $('#as_api_key').on('input', function () {
+            config.apiKey = this.value.trim();
+            saveConfig();
+        });
+
+        $('#as_model').on('input', function () {
+            config.model = this.value.trim();
+            saveConfig();
+        });
+
+        // URL 前缀切换
+        $('#as_url_prefix').on('click', function () {
+            const current = $(this).text().trim();
+            const next = current === 'https://' ? 'http://' : 'https://';
+            $(this).text(next);
+            config.apiPrefix = next;
+            saveConfig();
+        });
+
+        // ===== 测试连接 =====
+        $('#as_btn_test').on('click', async function () {
+            const btn = $(this);
+            btn.prop('disabled', true);
+            setTestResult('测试中...');
+
+            try {
+                readUIConfig();
+                const fullUrl = config.apiPrefix + config.apiUrl;
+                const result = await testAPIConnection(fullUrl, config.apiKey, config.model);
+                setTestResult('✓ 连接成功！模型: ' + result, 'success');
+            } catch (e) {
+                setTestResult('✗ ' + (e.message || e), 'error');
+            } finally {
+                btn.prop('disabled', false);
+            }
         });
 
         // 频率滑块
@@ -247,10 +428,15 @@
             saveConfig();
         });
 
-        // 立即总结按钮
+        // 立即总结
         $('#as_btn_summarize').on('click', async function () {
             if (isProcessing) {
                 setStatus('正在处理中，请稍候...', 'error');
+                return;
+            }
+            readUIConfig();
+            if (!config.apiUrl || !config.apiKey || !config.model) {
+                setStatus('请先填写 API 地址、Key 和模型名称', 'error');
                 return;
             }
             const btn = $(this);
@@ -267,12 +453,10 @@
             }
         });
 
-        // 历史记录按钮
-        $('#as_btn_history').on('click', function () {
-            showHistoryModal();
-        });
+        // 历史记录
+        $('#as_btn_history').on('click', () => showHistoryModal());
 
-        // 重置计数按钮
+        // 重置计数
         $('#as_btn_reset').on('click', function () {
             messageCounter = 0;
             updateCounterDisplay();
@@ -280,29 +464,54 @@
         });
     }
 
+    // ========== API 测试 ==========
+
+    async function testAPIConnection(url, apiKey, model) {
+        const headers = { 'Content-Type': 'application/json' };
+        if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
+
+        const body = {
+            model: model,
+            messages: [{ role: 'user', content: 'Reply with "OK" only.' }],
+            max_tokens: 10,
+            temperature: 0
+        };
+
+        const resp = await $.ajax({
+            url: url,
+            type: 'POST',
+            contentType: 'application/json',
+            headers: headers,
+            data: JSON.stringify(body),
+            timeout: 15000
+        });
+
+        // 解析返回的模型名
+        let modelName = model;
+        if (resp.model) modelName = resp.model;
+        if (resp.choices && resp.choices[0]?.model) modelName = resp.choices[0].model;
+
+        return modelName;
+    }
+
     // ========== 消息计数与事件监听 ==========
 
-    /** 统计当前聊天中的用户+助手消息轮数 */
     function countExistingMessages() {
         const ctx = getContext();
         const chat = ctx.chat || [];
-        messageCounter = 0;
+        let count = 0;
         for (const msg of chat) {
-            if (msg.is_user || msg.is_system === false && !msg.is_user) {
-                // 只计用户和角色消息（排除纯系统消息）
-                if (!msg.is_system) {
-                    messageCounter++;
-                }
+            if (!msg.is_system && (msg.is_user || (!msg.is_user && !msg.is_system))) {
+                count++;
             }
         }
-        // 按轮计算（每轮 = 用户消息 + 助手消息 = 2条）
-        messageCounter = Math.floor(messageCounter / 2);
+        messageCounter = Math.floor(count / 2);
         updateCounterDisplay();
     }
 
-    /** 检查是否应该触发总结 */
     function checkAndSummarize() {
         if (!config.enabled || isProcessing) return;
+        if (!config.apiUrl || !config.apiKey || !config.model) return;
         if (messageCounter >= config.frequency) {
             log(`达到触发条件 (${messageCounter} >= ${config.frequency})，开始总结...`);
             messageCounter = 0;
@@ -314,7 +523,6 @@
         }
     }
 
-    /** 绑定 SillyTavern 事件 */
     function bindEvents() {
         if (eventBound) return;
 
@@ -322,140 +530,102 @@
         const es = ctx.eventSource;
 
         if (es && typeof es.on === 'function') {
-            // 消息接收事件 — 新消息到达时增加计数
-            if (typeof es.eventNames === 'function') {
-                const names = es.eventNames();
-                log('可用事件:', names);
-            }
-
-            // 尝试绑定消息事件
             const messageEvents = ['messageReceived', 'messageSent', 'MESSAGE_RECEIVED', 'MESSAGE_SENT'];
             for (const evtName of messageEvents) {
                 try {
                     es.on(evtName, function () {
-                        // 延迟一点确保 chat 数组已更新
                         setTimeout(() => {
                             messageCounter++;
                             updateCounterDisplay();
-                            log(`消息事件 ${evtName}，当前计数: ${messageCounter}`);
+                            log(`事件 ${evtName}，计数: ${messageCounter}`);
                             checkAndSummarize();
                         }, 500);
                     });
-                    log(`已绑定事件: ${evtName}`);
-                } catch (e) {
-                    // 事件不存在，忽略
-                }
+                    log(`已绑定: ${evtName}`);
+                } catch (e) { /* 事件不存在 */ }
             }
 
-            // 聊天切换事件
             const chatEvents = ['chatLoaded', 'CHAT_CHANGED', 'chatChanged'];
             for (const evtName of chatEvents) {
                 try {
                     es.on(evtName, function () {
                         setTimeout(() => {
                             countExistingMessages();
-                            log(`聊天切换事件 ${evtName}，重新计数`);
+                            log(`聊天切换: ${evtName}`);
                         }, 1000);
                     });
-                    log(`已绑定事件: ${evtName}`);
-                } catch (e) {
-                    // 事件不存在，忽略
-                }
+                    log(`已绑定: ${evtName}`);
+                } catch (e) { /* 事件不存在 */ }
             }
 
             eventBound = true;
         } else {
-            logWarn('eventSource 不可用，尝试 DOM 观察模式');
+            logWarn('eventSource 不可用，使用 DOM Observer');
             startDOMObserver();
         }
     }
 
-    /** 备用方案：通过 MutationObserver 监听新消息 */
     function startDOMObserver() {
-        const chatContainer = document.getElementById('chat') || document.querySelector('.mes');
-        if (!chatContainer) {
-            logWarn('找不到聊天容器，DOM 观察不可用');
+        const chatEl = document.getElementById('chat') || document.querySelector('.mes');
+        if (!chatEl) {
+            logWarn('找不到聊天容器');
             return;
         }
-
-        const targetNode = chatContainer.parentElement || chatContainer;
+        const target = chatEl.parentElement || chatEl;
         const observer = new MutationObserver(function (mutations) {
-            let hasNewMessage = false;
-            for (const mutation of mutations) {
-                if (mutation.addedNodes.length > 0) {
-                    for (const node of mutation.addedNodes) {
-                        if (node.nodeType === 1 && node.classList && node.classList.contains('mes')) {
-                            hasNewMessage = true;
-                            break;
-                        }
+            let hasNew = false;
+            for (const m of mutations) {
+                for (const node of m.addedNodes) {
+                    if (node.nodeType === 1 && node.classList && node.classList.contains('mes')) {
+                        hasNew = true;
+                        break;
                     }
                 }
-                if (hasNewMessage) break;
+                if (hasNew) break;
             }
-            if (hasNewMessage) {
+            if (hasNew) {
                 messageCounter++;
                 updateCounterDisplay();
                 checkAndSummarize();
             }
         });
-
-        observer.observe(targetNode, { childList: true, subtree: true });
+        observer.observe(target, { childList: true, subtree: true });
         log('DOM Observer 已启动');
     }
 
     // ========== 总结生成 ==========
 
-    /** 获取总结系统提示词 */
     function getSystemPrompt() {
-        if (config.style === 'custom' && config.customPrompt.trim()) {
+        if (config.style === 'custom' && config.customPrompt && config.customPrompt.trim()) {
             return config.customPrompt.trim();
         }
         return STYLE_PROMPTS[config.style] || STYLE_PROMPTS.normal;
     }
 
-    /** 获取上一条总结 */
     function getLastSummary() {
         const ctx = getContext();
-        const chatMeta = ctx.chat_metadata || {};
-        const summaries = chatMeta.auto_summaries || [];
+        const summaries = (ctx.chat_metadata || {}).auto_summaries || [];
         return summaries.length > 0 ? summaries[summaries.length - 1] : null;
     }
 
-    /** 保存总结到聊天元数据 */
-    async function saveSummary(summaryText) {
+    async function saveSummary(text) {
         const ctx = getContext();
-
-        if (!ctx.chat_metadata) {
-            ctx.chat_metadata = {};
-        }
-        if (!ctx.chat_metadata.auto_summaries) {
-            ctx.chat_metadata.auto_summaries = [];
-        }
+        if (!ctx.chat_metadata) ctx.chat_metadata = {};
+        if (!ctx.chat_metadata.auto_summaries) ctx.chat_metadata.auto_summaries = [];
 
         ctx.chat_metadata.auto_summaries.push({
-            text: summaryText,
+            text: text,
             timestamp: Date.now(),
             messageRange: (ctx.chat || []).length,
-            style: config.style
+            style: config.style,
+            model: config.model
         });
 
-        // 保存聊天元数据
         try {
             if (typeof ctx.saveMetadata === 'function') {
                 await ctx.saveMetadata();
             } else if (typeof saveMetadata === 'function') {
                 await saveMetadata();
-            } else {
-                // 回退：通过 API 保存
-                await $.ajax({
-                    url: '/api/chats/save',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify({
-                        chat_metadata: ctx.chat_metadata,
-                        file_name: ctx.chatMetadata?.file_name || ''
-                    })
-                });
             }
             log('总结已保存');
         } catch (e) {
@@ -463,117 +633,111 @@
         }
     }
 
-    /**
-     * 调用 LLM API 生成总结
-     * 使用 SillyTavern 的后端代理，自动使用用户配置的 API
-     */
-    async function callLLM(systemPrompt, userContent) {
-        // 方案 1：使用 SillyTavern 内置的 /api/summarize 端点
-        // （如果用户开启了总结功能）
-        try {
-            const response = await $.ajax({
-                url: '/api/summarize',
-                type: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify({
-                    text: userContent,
-                    params: {
-                        custom_prompt: systemPrompt,
-                        max_tokens: config.maxTokens
-                    }
-                }),
-                timeout: 60000
-            });
-
-            if (response && typeof response === 'string' && response.trim()) {
-                return response.trim();
-            }
-            if (response && response.summary) {
-                return response.summary.trim();
-            }
-        } catch (e) {
-            log('内置总结端点不可用，尝试直接 API 调用...');
-        }
-
-        // 方案 2：通过后端代理直接调用聊天完成 API
-        const messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: userContent }
-        ];
-
-        const requestBody = {
-            messages: messages,
-            max_tokens: config.maxTokens,
-            temperature: 0.3
-        };
-
-        try {
-            const response = await $.ajax({
-                url: '/api/backends/chat-completions/generate',
-                type: 'POST',
-                contentType: 'application/json',
-                data: JSON.stringify(requestBody),
-                timeout: 60000
-            });
-
-            // 解析响应（不同 API 返回格式可能不同）
-            if (typeof response === 'string') {
-                return response.trim();
-            }
-            if (response.choices && response.choices[0]) {
-                return response.choices[0].message.content.trim();
-            }
-            if (response.content) {
-                return (typeof response.content === 'string'
-                    ? response.content
-                    : response.content[0]?.text || ''
-                ).trim();
-            }
-            if (response.output) {
-                return response.output.trim();
-            }
-
-            throw new Error('无法解析 API 响应');
-        } catch (e) {
-            logWarn('API 调用失败:', e);
-            throw new Error('API 调用失败: ' + (e.responseJSON?.error?.message || e.statusText || e.message || '未知错误'));
-        }
-    }
-
-    /** 构建发送给 AI 的对话内容 */
     function buildConversationText() {
         const ctx = getContext();
         const chat = ctx.chat || [];
         const name1 = ctx.name1 || 'User';
         const name2 = ctx.name2 || 'Character';
 
-        // 获取最近 N 条消息
         const startIdx = Math.max(0, chat.length - config.contextMessages);
         const recentMessages = chat.slice(startIdx);
 
         let text = '';
         for (const msg of recentMessages) {
             const sender = msg.is_user ? name1 : (msg.name || name2);
-            const content = msg.mes || '';
-            text += `${sender}: ${content}\n\n`;
+            text += `${sender}: ${msg.mes || ''}\n\n`;
         }
 
-        // 如果启用，附加之前的总结
         if (config.includePreviousSummary) {
-            const lastSummary = getLastSummary();
-            if (lastSummary) {
-                text = `[之前的对话总结]\n${lastSummary.text}\n\n[新的对话内容]\n${text}`;
+            const last = getLastSummary();
+            if (last) {
+                text = `[之前的对话总结]\n${last.text}\n\n[新的对话内容]\n${text}`;
             }
         }
 
         return text.trim();
     }
 
-    /** 生成总结（核心函数） */
-    async function generateSummary() {
-        if (isProcessing) {
-            throw new Error('正在处理中');
+    /**
+     * 核心：直接调用用户配置的 API
+     */
+    async function callLLM(systemPrompt, userContent) {
+        const fullUrl = config.apiPrefix + config.apiUrl;
+
+        const headers = { 'Content-Type': 'application/json' };
+        if (config.apiKey) {
+            headers['Authorization'] = 'Bearer ' + config.apiKey;
         }
+
+        const body = {
+            model: config.model,
+            messages: [
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: userContent }
+            ],
+            max_tokens: config.maxTokens,
+            temperature: 0.3,
+            stream: false
+        };
+
+        log('请求 URL:', fullUrl);
+        log('请求模型:', config.model);
+        log('消息长度:', userContent.length, '字符');
+
+        let response;
+        try {
+            response = await $.ajax({
+                url: fullUrl,
+                type: 'POST',
+                contentType: 'application/json',
+                headers: headers,
+                data: JSON.stringify(body),
+                timeout: 120000
+            });
+        } catch (xhr) {
+            let errMsg = '未知错误';
+            if (xhr.responseJSON) {
+                const err = xhr.responseJSON.error || xhr.responseJSON;
+                errMsg = err.message || err.error || JSON.stringify(err);
+            } else if (xhr.statusText) {
+                errMsg = xhr.status + ' ' + xhr.statusText;
+            }
+            throw new Error('API 请求失败: ' + errMsg);
+        }
+
+        // 解析响应 — 兼容多种格式
+        if (typeof response === 'string') {
+            return response.trim();
+        }
+
+        // OpenAI 格式: choices[0].message.content
+        if (response.choices && response.choices[0]) {
+            const choice = response.choices[0];
+            let content = choice.message?.content || choice.text || '';
+            // 处理数组格式的 content (某些多模态模型)
+            if (Array.isArray(content)) {
+                content = content.map(c => (typeof c === 'string' ? c : c.text || '')).join('');
+            }
+            return content.trim();
+        }
+
+        // Anthropic 格式: content[0].text
+        if (response.content && Array.isArray(response.content)) {
+            return response.content.map(c => c.text || '').join('').trim();
+        }
+
+        // 简单格式: output / result / response
+        for (const key of ['output', 'result', 'response', 'reply', 'answer']) {
+            if (response[key] && typeof response[key] === 'string') {
+                return response[key].trim();
+            }
+        }
+
+        throw new Error('无法解析 API 响应格式: ' + JSON.stringify(response).slice(0, 200));
+    }
+
+    async function generateSummary() {
+        if (isProcessing) throw new Error('正在处理中');
 
         const ctx = getContext();
         const chat = ctx.chat || [];
@@ -581,6 +745,10 @@
         if (chat.length < 2) {
             setStatus('对话太少，跳过总结');
             return;
+        }
+
+        if (!config.apiUrl || !config.apiKey || !config.model) {
+            throw new Error('请先配置 API 地址、Key 和模型');
         }
 
         isProcessing = true;
@@ -591,25 +759,21 @@
             const systemPrompt = getSystemPrompt();
             const conversationText = buildConversationText();
 
-            if (!conversationText.trim()) {
+            if (!conversationText) {
                 setStatus('没有可总结的内容');
                 return;
             }
 
-            log('发送总结请求...');
+            log('开始生成总结...');
             const summary = await callLLM(systemPrompt, conversationText);
 
             if (summary && summary.trim()) {
                 await saveSummary(summary.trim());
                 setStatus('总结完成！', 'success');
-                log('总结结果:', summary.trim());
-
-                // 3 秒后清除成功状态
+                log('总结结果:', summary.trim().slice(0, 100) + '...');
                 setTimeout(() => {
-                    if ($('#as_status').hasClass('success')) {
-                        setStatus('');
-                    }
-                }, 3000);
+                    if ($('#as_status').hasClass('success')) setStatus('');
+                }, 4000);
             } else {
                 setStatus('AI 返回了空内容', 'error');
             }
@@ -621,11 +785,16 @@
 
     // ========== 历史记录弹窗 ==========
 
+    function escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+
     function showHistoryModal() {
         const ctx = getContext();
         const summaries = (ctx.chat_metadata || {}).auto_summaries || [];
 
-        // 移除已有弹窗
         $('.as-modal-overlay').remove();
 
         let entriesHtml = '';
@@ -635,60 +804,47 @@
             for (let i = summaries.length - 1; i >= 0; i--) {
                 const s = summaries[i];
                 const time = new Date(s.timestamp).toLocaleString('zh-CN', {
-                    month: '2-digit',
-                    day: '2-digit',
-                    hour: '2-digit',
-                    minute: '2-digit'
+                    month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit'
                 });
+                const modelTag = s.model ? ` · ${s.model}` : '';
                 entriesHtml += `
                 <div class="as-summary-entry">
                     <div class="entry-meta">
-                        <span>#${i + 1} · ${time}</span>
-                        <span>风格: ${s.style || 'normal'}</span>
+                        <span>#${i + 1} · ${time}${modelTag}</span>
+                        <span>${s.style || 'normal'}</span>
                     </div>
                     <div class="entry-text">${escapeHtml(s.text)}</div>
                 </div>`;
             }
         }
 
-        const modalHtml = `
+        const modal = $(`
         <div class="as-modal-overlay" id="as_history_modal">
             <div class="as-modal">
                 <div class="as-modal-header">
                     <h3>📋 历史总结 (${summaries.length})</h3>
                     <button class="as-modal-close" id="as_modal_close">&times;</button>
                 </div>
-                <div class="as-modal-body">
-                    ${entriesHtml}
-                </div>
+                <div class="as-modal-body">${entriesHtml}</div>
                 <div class="as-modal-footer">
                     <button id="as_export_summaries">导出全部</button>
                     <button id="as_clear_summaries" class="danger">清除全部</button>
                 </div>
             </div>
-        </div>`;
+        </div>`);
 
-        $('body').append(modalHtml);
+        $('body').append(modal);
 
-        // 绑定事件
-        $('#as_modal_close').on('click', () => $('#as_history_modal').remove());
-        $('#as_history_modal').on('click', function (e) {
-            if (e.target === this) $(this).remove();
-        });
+        $('#as_modal_close').on('click', () => modal.remove());
+        modal.on('click', function (e) { if (e.target === this) $(this).remove(); });
 
-        // 导出
         $('#as_export_summaries').on('click', function () {
-            if (summaries.length === 0) {
-                alert('没有可导出的总结');
-                return;
-            }
-            let exportText = '# 对话总结记录\n\n';
+            if (summaries.length === 0) { alert('没有可导出的总结'); return; }
+            let md = '# 对话总结记录\n\n';
             summaries.forEach((s, i) => {
-                const time = new Date(s.timestamp).toLocaleString('zh-CN');
-                exportText += `## 总结 #${i + 1} (${time})\n\n${s.text}\n\n---\n\n`;
+                md += `## #${i + 1} (${new Date(s.timestamp).toLocaleString('zh-CN')})\n\n${s.text}\n\n---\n\n`;
             });
-
-            const blob = new Blob([exportText], { type: 'text/markdown;charset=utf-8' });
+            const blob = new Blob([md], { type: 'text/markdown;charset=utf-8' });
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -697,35 +853,22 @@
             URL.revokeObjectURL(url);
         });
 
-        // 清除全部
         $('#as_clear_summaries').on('click', async function () {
-            if (!confirm('确定要清除所有总结记录吗？此操作不可撤销。')) return;
+            if (!confirm('确定清除所有总结？')) return;
             if (ctx.chat_metadata) {
                 ctx.chat_metadata.auto_summaries = [];
-                if (typeof ctx.saveMetadata === 'function') {
-                    await ctx.saveMetadata();
-                }
+                if (typeof ctx.saveMetadata === 'function') await ctx.saveMetadata();
             }
-            $('#as_history_modal').remove();
-            setStatus('已清除所有总结记录');
+            modal.remove();
+            setStatus('已清除所有总结');
         });
-    }
-
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
     }
 
     // ========== 初始化 ==========
 
     async function init() {
         try {
-            log('初始化中...');
-
-            // 等待 jQuery 和 SillyTavern 就绪
             if (typeof $ === 'undefined') {
-                logWarn('jQuery 未加载，等待中...');
                 await sleep(1000);
                 return init();
             }
@@ -733,7 +876,6 @@
             loadConfig();
             buildUI();
 
-            // 等待聊天加载完成后再绑定事件
             await sleep(2000);
             bindEvents();
             countExistingMessages();
@@ -747,9 +889,6 @@
         }
     }
 
-    // ========== 入口 ==========
-
-    // 等待 DOM 就绪后初始化
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', init);
     } else {

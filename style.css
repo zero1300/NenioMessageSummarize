@@ -31,7 +31,7 @@
     gap: 10px;
     overflow: hidden;
     transition: max-height 0.3s ease, opacity 0.3s ease;
-    max-height: 2000px;
+    max-height: 3000px;
     opacity: 1;
 }
 
@@ -39,6 +39,17 @@
     max-height: 0;
     opacity: 0;
     pointer-events: none;
+}
+
+/* --- Section Headers --- */
+.as-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--SmartThemeEmColor, #999);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 4px 0 2px;
+    user-select: none;
 }
 
 /* --- Toggle Row --- */
@@ -110,7 +121,9 @@
 }
 
 .as-control select,
-.as-control input[type="number"] {
+.as-control input[type="number"],
+.as-control input[type="text"],
+.as-control input[type="password"] {
     width: 100%;
     padding: 6px 8px;
     background: var(--SmartThemeBlurTintColor, rgba(30, 30, 30, 0.8));
@@ -123,14 +136,44 @@
     box-sizing: border-box;
 }
 
+.as-control input[type="password"] {
+    font-family: monospace;
+    letter-spacing: 1px;
+}
+
 .as-control select:focus,
-.as-control input[type="number"]:focus {
+.as-control input:focus {
     border-color: var(--SmartThemeQuoteColor, #6cacee);
 }
 
 .as-control select option {
     background: var(--SmartThemeBlurTintColor, #1e1e1e);
     color: var(--SmartThemeBodyColor, #ddd);
+}
+
+/* --- API URL with prefix --- */
+.as-api-url-row {
+    display: flex;
+    gap: 0;
+    align-items: stretch;
+}
+
+.as-api-url-prefix {
+    padding: 6px 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(20, 20, 20, 0.9));
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-right: none;
+    border-radius: 6px 0 0 6px;
+    color: var(--SmartThemeEmColor, #777);
+    font-size: 12px;
+    line-height: 20px;
+    white-space: nowrap;
+    user-select: none;
+}
+
+.as-api-url-row input {
+    border-radius: 0 6px 6px 0 !important;
+    border-left: none !important;
 }
 
 /* --- Slider --- */
@@ -237,6 +280,37 @@
     border: none;
     border-top: 1px solid var(--SmartThemeBorderColor, #333);
     margin: 4px 0;
+}
+
+/* --- Preset Chips --- */
+.as-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: 2px;
+}
+
+.as-chip {
+    padding: 3px 8px;
+    border: 1px solid var(--SmartThemeBorderColor, #444);
+    border-radius: 12px;
+    background: transparent;
+    color: var(--SmartThemeEmColor, #999);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.as-chip:hover {
+    border-color: var(--SmartThemeQuoteColor, #6cacee);
+    color: var(--SmartThemeQuoteColor, #6cacee);
+}
+
+.as-chip.active {
+    background: var(--SmartThemeQuoteColor, #6cacee);
+    border-color: var(--SmartThemeQuoteColor, #6cacee);
+    color: #fff;
 }
 
 /* --- Summary Modal --- */
@@ -357,4 +431,20 @@
 .as-modal-footer button.danger:hover {
     background: #c04040;
     border-color: #c04040;
+}
+
+/* --- Test Connection Button --- */
+.as-test-row {
+    display: flex;
+    gap: 6px;
+}
+
+.as-test-row button {
+    flex-shrink: 0;
+}
+
+.as-test-result {
+    font-size: 11px;
+    padding: 2px 0;
+    min-height: 16px;
 }

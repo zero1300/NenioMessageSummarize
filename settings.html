@@ -17,6 +17,55 @@
 
         <hr class="as-divider">
 
+        <!-- ===== API 配置 ===== -->
+        <div class="as-section-title">API 配置</div>
+
+        <!-- 预设 -->
+        <div class="as-control">
+            <label>快速预设</label>
+            <div class="as-presets" id="as_presets">
+                <button class="as-chip" data-preset="openai">OpenAI</button>
+                <button class="as-chip" data-preset="openrouter">OpenRouter</button>
+                <button class="as-chip" data-preset="deepseek">DeepSeek</button>
+                <button class="as-chip" data-preset="moonshot">Moonshot</button>
+                <button class="as-chip" data-preset="glm">智谱 GLM</button>
+                <button class="as-chip" data-preset="ollama">Ollama</button>
+                <button class="as-chip" data-preset="custom">自定义</button>
+            </div>
+        </div>
+
+        <!-- API URL -->
+        <div class="as-control">
+            <label for="as_api_url">API 地址</label>
+            <div class="as-api-url-row">
+                <span class="as-api-url-prefix" id="as_url_prefix">https://</span>
+                <input type="text" id="as_api_url" placeholder="api.openai.com/v1/chat/completions" spellcheck="false">
+            </div>
+        </div>
+
+        <!-- API Key -->
+        <div class="as-control">
+            <label for="as_api_key">API Key</label>
+            <input type="password" id="as_api_key" placeholder="sk-xxxxxxxx" spellcheck="false" autocomplete="off">
+        </div>
+
+        <!-- 模型 -->
+        <div class="as-control">
+            <label for="as_model">模型名称</label>
+            <input type="text" id="as_model" placeholder="gpt-4o-mini" spellcheck="false">
+        </div>
+
+        <!-- 测试连接 -->
+        <div class="as-test-row">
+            <button id="as_btn_test" style="flex:0 0 auto; padding: 5px 12px;">🔗 测试连接</button>
+            <div class="as-test-result" id="as_test_result"></div>
+        </div>
+
+        <hr class="as-divider">
+
+        <!-- ===== 总结配置 ===== -->
+        <div class="as-section-title">总结配置</div>
+
         <!-- 触发频率 -->
         <div class="as-control">
             <label for="as_frequency">触发频率（每 N 轮对话后总结）</label>
@@ -41,7 +90,7 @@
         <div class="as-control">
             <label for="as_max_tokens">总结最大 Token 数</label>
             <div class="as-slider-row">
-                <input type="range" id="as_max_tokens" min="50" max="1000" value="300" step="50">
+                <input type="range" id="as_max_tokens" min="50" max="2000" value="300" step="50">
                 <span class="as-slider-val" id="as_max_tokens_val">300</span>
             </div>
         </div>
@@ -50,7 +99,7 @@
         <div class="as-control">
             <label for="as_context_messages">发送给 AI 的最近消息数</label>
             <div class="as-slider-row">
-                <input type="range" id="as_context_messages" min="5" max="100" value="30" step="5">
+                <input type="range" id="as_context_messages" min="5" max="200" value="30" step="5">
                 <span class="as-slider-val" id="as_context_messages_val">30</span>
             </div>
         </div>
@@ -63,8 +112,6 @@
                 <span class="slider"></span>
             </div>
         </div>
-
-        <hr class="as-divider">
 
         <!-- 自定义提示词 -->
         <div class="as-control" id="as_custom_prompt_wrap" style="display:none;">
