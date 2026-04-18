@@ -1,0 +1,92 @@
+<div class="amc-settings">
+    <div class="inline-drawer">
+        <div class="inline-drawer-toggle inline-drawer-header">
+            <b>{{title}}</b>
+            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
+        </div>
+
+        <div class="inline-drawer-content">
+            <div class="amc-panel">
+                <div class="amc-stats">
+                    <div class="amc-stat-card">
+                        <div class="amc-stat-value" id="amc_stat_total">0</div>
+                        <div class="amc-stat-label">逻辑楼层</div>
+                    </div>
+                    <div class="amc-stat-card">
+                        <div class="amc-stat-value" id="amc_stat_pending">0</div>
+                        <div class="amc-stat-label">待压缩</div>
+                    </div>
+                    <div class="amc-stat-card">
+                        <div class="amc-stat-value" id="amc_stat_capsules">0</div>
+                        <div class="amc-stat-label">记忆胶囊</div>
+                    </div>
+                    <div class="amc-stat-card">
+                        <div class="amc-stat-value" id="amc_stat_archived">0</div>
+                        <div class="amc-stat-label">已归档</div>
+                    </div>
+                </div>
+
+                <div class="amc-progress">
+                    <div class="amc-progress-bar">
+                        <div class="amc-progress-fill" id="amc_progress_fill"></div>
+                    </div>
+                    <div class="amc-progress-text" id="amc_progress_text">0% 已压缩</div>
+                </div>
+
+                <div class="amc-row">
+                    <label for="amc_enabled">启用自动记忆压缩</label>
+                    <input id="amc_enabled" type="checkbox" />
+                </div>
+
+                <div class="amc-row">
+                    <label for="amc_compact_enabled">自动把旧消息压缩成记忆胶囊</label>
+                    <input id="amc_compact_enabled" type="checkbox" />
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_threshold">每次归档的楼层阈值</label>
+                    <div class="amc-slider-row">
+                        <input id="amc_threshold" type="range" min="4" max="40" step="1" />
+                        <span id="amc_threshold_value">12</span>
+                    </div>
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_keep_recent">始终保留最近原始楼层</label>
+                    <div class="amc-slider-row">
+                        <input id="amc_keep_recent" type="range" min="2" max="20" step="1" />
+                        <span id="amc_keep_recent_value">6</span>
+                    </div>
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_summary_style">总结风格</label>
+                    <select id="amc_summary_style">
+                        <option value="brief">简短</option>
+                        <option value="balanced">平衡</option>
+                        <option value="detailed">详细</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_include_previous">总结时带上上一条胶囊作为上下文</label>
+                    <input id="amc_include_previous" type="checkbox" />
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_custom_prompt">自定义总结提示词</label>
+                    <textarea id="amc_custom_prompt" rows="4" placeholder="例如：请重点总结角色关系变化、关键承诺、当前目标与潜在冲突。"></textarea>
+                </div>
+
+                <div class="amc-actions">
+                    <button id="amc_btn_run" class="menu_button">立即压缩当前可归档消息</button>
+                    <button id="amc_btn_history" class="menu_button">查看胶囊历史</button>
+                    <button id="amc_btn_reset" class="menu_button">重置当前聊天状态</button>
+                </div>
+
+                <div class="amc-status" id="amc_status"></div>
+            </div>
+        </div>
+    </div>
+</div>
