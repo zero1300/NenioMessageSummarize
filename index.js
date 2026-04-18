@@ -1,23 +1,12 @@
 /**
- * Auto Summary Extension for SillyTavern v1.2
+ * Auto Summary Extension for SillyTavern v1.3
  *
+ * - 结构化数据管理，每个聊天独立存储
+ * - localStorage 双存储，确保数据不丢失
+ * - 轮询 + 事件双驱动更新统计
  * - 手动配置 API 地址 / Key / 模型
- * - 楼层统计与已总结范围追踪
- * - 总结前弹窗确认
- * - 世界书自动写入（Summary_角色名_日期_序号）
+ * - 世界书自动写入
  */
-// ========== 调试：输出世界书信息 ==========
-window._asDebugWorldInfo = function () {
-    const ctx = getContext();
-    console.log('=== 世界书调试信息 ===');
-    console.log('context.worldinfo:', ctx.worldinfo);
-    console.log('world_info (global):', typeof world_info !== 'undefined' ? world_info : '未定义');
-    console.log('world_info_data (global):', typeof world_info_data !== 'undefined' ? world_info_data : '未定义');
-    console.log('context.characters[chid]:', ctx.characters?.[ctx.this_chid]);
-    console.log('event_types:', typeof event_types !== 'undefined' ? event_types : '未定义');
-    console.log('======================');
-};
-
 (function () {
     'use strict';
 
@@ -33,13 +22,13 @@ window._asDebugWorldInfo = function () {
 
     // ========== API 预设 ==========
     const PRESETS = {
-        openai: { url: 'api.openai.com/v1/chat/completions', prefix: 'https://', model: 'gpt-4o-mini' },
-        openrouter: { url: 'openrouter.ai/api/v1/chat/completions', prefix: 'https://', model: 'openai/gpt-4o-mini' },
-        deepseek: { url: 'api.deepseek.com/v1/chat/completions', prefix: 'https://', model: 'deepseek-chat' },
-        moonshot: { url: 'api.moonshot.cn/v1/chat/completions', prefix: 'https://', model: 'moonshot-v1-8k' },
-        glm: { url: 'open.bigmodel.cn/api/paas/v4/chat/completions', prefix: 'https://', model: 'glm-4-flash' },
-        ollama: { url: '127.0.0.1:11434/v1/chat/completions', prefix: 'http://', model: 'qwen2.5:7b' },
-        custom: { url: '', prefix: 'https://', model: '' }
+        openai:     { url: 'api.openai.com/v1/chat/completions',            prefix: 'https://', model: 'gpt-4o-mini' },
+        openrouter: { url: 'openrouter.ai/api/v1/chat/completions',         prefix: 'https://', model: 'openai/gpt-4o-mini' },
+        deepseek:   { url: 'api.deepseek.com/v1/chat/completions',          prefix: 'https://', model: 'deepseek-chat' },
+        moonshot:   { url: 'api.moonshot.cn/v1/chat/completions',           prefix: 'https://', model: 'moonshot-v1-8k' },
+        glm:        { url: 'open.bigmodel.cn/api/paas/v4/chat/completions', prefix: 'https://', model: 'glm-4-flash' },
+        ollama:     { url: '127.0.0.1:11434/v1/chat/completions',           prefix: 'http://',  model: 'qwen2.5:7b' },
+        custom:     { url: '', prefix: 'https://', model: '' }
     };
 
     // ========== 全局状态 ==========
@@ -49,41 +38,10 @@ window._asDebugWorldInfo = function () {
     let isConfirming = false;
     let eventBound = false;
     let autoSummarizePaused = false;
+    let pollInterval = null;
+    let currentChatId = null;
 
-    // ========== 工具 ==========
-
-    let _cachedCtx = null;
-
-    function getContext() {
-        if (_cachedCtx) return _cachedCtx;
-
-        if (typeof SillyTavern !== 'undefined' && SillyTavern.getContext) {
-            _cachedCtx = SillyTavern.getContext();
-        } else {
-            _cachedCtx = {
-                extensionSettings: window.extension_settings || {},
-                chat: window.chat || [],
-                characters: window.characters || [],
-                this_chid: window.this_chid,
-                eventSource: window.eventSource,
-                name1: window.name1 || 'User',
-                name2: window.name2 || 'Character',
-                chat_metadata: window.chat_metadata || {},
-                saveSettingsDebounced: window.saveSettingsDebounced || function () { }
-            };
-        }
-
-        // 确保关键字段始终存在
-        if (!_cachedCtx.chat_metadata) {
-            _cachedCtx.chat_metadata = {};
-        }
-        if (!_cachedCtx.chat_metadata.auto_summaries) {
-            _cachedCtx.chat_metadata.auto_summaries = [];
-        }
-
-        return _cachedCtx;
-    }
-
+    // ========== 日志 ==========
     function log(...a) { console.log(LOG_PREFIX, ...a); }
     function logWarn(...a) { console.warn(LOG_PREFIX, ...a); }
     function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -111,12 +69,174 @@ window._asDebugWorldInfo = function () {
         return d.innerHTML;
     }
 
-    // ========== 楼层统计 ==========
+    // ================================================================
+    //  数据层：结构化存储，每个聊天独立
+    // ================================================================
 
-    /** 获取所有真实消息（非系统消息）的索引 */
+    /** 生成当前聊天的唯一 ID */
+    function resolveChatId() {
+        const meta = window.chat_metadata || {};
+        const charId = window.this_chid;
+
+        // 优先用 ST 的 file_name
+        if (meta.file_name && typeof meta.file_name === 'string' && meta.file_name.trim()) {
+            return meta.file_name.trim();
+        }
+        // 用 character id
+        if (charId !== undefined && charId !== null && charId !== '') {
+            return 'char_' + String(charId);
+        }
+        // 兜底：缓存一个随机 ID
+        if (!currentChatId) {
+            currentChatId = 'chat_' + Date.now().toString(36);
+        }
+        return currentChatId;
+    }
+
+    /** 获取空的状态结构 */
+    function getEmptyState() {
+        return {
+            chatId: null,
+            messageCounter: 0,
+            summaries: [],
+            lastUpdated: Date.now(),
+            version: 1
+        };
+    }
+
+    /** 从 localStorage 读取指定聊天的状态 */
+    function loadStateFromLocal(chatId) {
+        try {
+            const key = EXT_NAME + '_' + chatId;
+            const raw = localStorage.getItem(key);
+            if (raw) {
+                const data = JSON.parse(raw);
+                if (data && data.version === 1) {
+                    return data;
+                }
+            }
+        } catch (e) {
+            logWarn('localStorage 读取失败:', e);
+        }
+        return null;
+    }
+
+    /** 保存状态到 localStorage */
+    function saveStateToLocal(chatId, state) {
+        try {
+            state.chatId = chatId;
+            state.lastUpdated = Date.now();
+            const key = EXT_NAME + '_' + chatId;
+            localStorage.setItem(key, JSON.stringify(state));
+        } catch (e) {
+            logWarn('localStorage 保存失败:', e);
+        }
+    }
+
+    /**
+     * 获取当前聊天的状态（核心函数）
+     * 优先从 localStorage 读取，回退到 chat_metadata
+     */
+    function getState() {
+        const chatId = resolveChatId();
+
+        // 1. 尝试从 localStorage 读取
+        let state = loadStateFromLocal(chatId);
+
+        // 2. 回退到 chat_metadata
+        if (!state) {
+            const meta = window.chat_metadata || {};
+            const summaries = meta.auto_summaries || [];
+            if (summaries.length > 0) {
+                state = getEmptyState();
+                state.chatId = chatId;
+                state.summaries = summaries.slice(); // 拷贝
+                // 从 chat 推算 messageCounter
+                const chat = window.chat || [];
+                const lastSummary = summaries[summaries.length - 1];
+                if (lastSummary && lastSummary.endIndex !== undefined) {
+                    state.messageCounter = Math.max(0, chat.length - 1 - lastSummary.endIndex);
+                } else {
+                    state.messageCounter = 0;
+                }
+                // 写回 localStorage
+                saveStateToLocal(chatId, state);
+                log('从 chat_metadata 恢复状态, 记录数:', summaries.length);
+            }
+        }
+
+        // 3. 完全没有数据，创建空状态
+        if (!state) {
+            state = getEmptyState();
+            state.chatId = chatId;
+        }
+
+        return state;
+    }
+
+    /** 保存状态（双写 localStorage + chat_metadata） */
+    async function saveState(state) {
+        const chatId = resolveChatId();
+        state.chatId = chatId;
+
+        // 写入 localStorage（即时，不依赖任何异步操作）
+        saveStateToLocal(chatId, state);
+
+        // 同步到 chat_metadata（兼容 ST 内置功能）
+        if (!window.chat_metadata) {
+            window.chat_metadata = {};
+        }
+        window.chat_metadata.auto_summaries = state.summaries.slice();
+
+        // 尝试持久化到服务器
+        try {
+            if (typeof saveMetadata === 'function') {
+                await saveMetadata();
+            } else if (typeof SillyTavern !== 'undefined') {
+                const ctx = SillyTavern.getContext();
+                if (ctx && typeof ctx.saveMetadata === 'function') {
+                    await ctx.saveMetadata();
+                }
+            }
+        } catch (e) {
+            logWarn('saveMetadata 失败（localStorage 已保存）:', e);
+        }
+    }
+
+    /** 同步：chat 切换后重新读取 */
+    function syncState() {
+        const newChatId = resolveChatId();
+        if (newChatId !== currentChatId) {
+            currentChatId = newChatId;
+            messageCounter = 0;
+            log('聊天切换, 新 ID:', currentChatId);
+        }
+
+        // 确保 window.chat_metadata 存在
+        if (!window.chat_metadata) {
+            window.chat_metadata = {};
+        }
+
+        // 从 localStorage 同步到 chat_metadata
+        const state = loadStateFromLocal(currentChatId);
+        if (state && state.summaries && state.summaries.length > 0) {
+            window.chat_metadata.auto_summaries = state.summaries.slice();
+            // 恢复 messageCounter
+            const chat = window.chat || [];
+            const lastSummary = state.summaries[state.summaries.length - 1];
+            if (lastSummary && lastSummary.endIndex !== undefined) {
+                messageCounter = Math.max(0, chat.length - 1 - lastSummary.endIndex);
+            }
+        }
+    }
+
+    // ================================================================
+    //  工具函数
+    // ================================================================
+
+    /** 获取真实消息索引（非系统消息） */
     function getRealMessageIndices() {
-        const ctx = getContext();
-        const chat = ctx.chat || [];
+        const chat = window.chat || [];
         const indices = [];
         for (let i = 0; i < chat.length; i++) {
             if (!chat[i].is_system) indices.push(i);
@@ -126,48 +246,45 @@ window._asDebugWorldInfo = function () {
 
     /** 获取当前角色名 */
     function getCharacterName() {
-        const ctx = getContext();
-        if (ctx.characters && ctx.this_chid !== undefined && ctx.characters[ctx.this_chid]) {
-            return ctx.characters[ctx.this_chid].name || 'Unknown';
+        const chars = window.characters;
+        const chid = window.this_chid;
+        if (chars && chid !== undefined && chars[chid]) {
+            return chars[chid].name || 'Unknown';
         }
-        return ctx.name2 || 'Unknown';
+        return window.name2 || 'Unknown';
     }
 
-    /** 计算已总结的消息总数 */
-    function getSummarizedCount() {
-        const ctx = getContext();
-        const summaries = (ctx.chat_metadata || {}).auto_summaries || [];
-        let total = 0;
-        for (const s of summaries) {
-            total += (s.messageRange || 0);
-        }
-        return total;
-    }
-
-    /** 获取已总结到的最大消息索引 */
+    /** 获取已总结的最大消息索引 */
     function getLastSummarizedIndex() {
-        const ctx = getContext();
-        const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
-        if (summaries.length === 0) return -1;
-        const last = summaries[summaries.length - 1];
+        const state = getState();
+        if (state.summaries.length === 0) return -1;
+        const last = state.summaries[state.summaries.length - 1];
         return (last.endIndex !== undefined) ? last.endIndex : -1;
     }
 
-    function updateStats() {
-        const ctx = getContext();
-        const chat = ctx.chat || [];
-        const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
+    /** 获取最后一条总结 */
+    function getLastSummary() {
+        const state = getState();
+        return state.summaries.length > 0 ? state.summaries[state.summaries.length - 1] : null;
+    }
 
-        const totalMsg = chat.length;
+    // ================================================================
+    //  统计更新
+    // ================================================================
+
+    function updateStats() {
+        const chat = window.chat || [];
+        const state = getState();
         const realIndices = getRealMessageIndices();
         const totalReal = realIndices.length;
 
+        // 计算已总结的真实消息数
         let summarizedReal = 0;
-        for (const s of summaries) {
+        for (const s of state.summaries) {
             summarizedReal += (s.messageRange || 0);
         }
         const unsavedReal = Math.max(0, totalReal - summarizedReal);
-        const recordCount = summaries.length;
+        const recordCount = state.summaries.length;
         const percent = totalReal > 0 ? Math.round((summarizedReal / totalReal) * 100) : 0;
 
         $('#as_stat_total').text(totalReal);
@@ -180,27 +297,25 @@ window._asDebugWorldInfo = function () {
         updateWorldBookInfo();
     }
 
-
     function updateWorldBookInfo() {
         try {
             const charName = getCharacterName();
-            const ctx = getContext();
-            const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
-            const nextNum = String(summaries.length + 1).padStart(3, '0');
+            const state = getState();
+            const nextNum = String(state.summaries.length + 1).padStart(3, '0');
             const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const wbName = `Summary_${charName}_${date}_${nextNum}`;
             $('#as_wb_info').html(`命名格式: <strong>${escapeHtml(wbName)}</strong>`);
-        } catch (e) { }
+        } catch (e) {}
     }
-
 
     function updateCounterDisplay() {
         const el = document.getElementById('as_counter');
         if (el) el.textContent = `已计数: ${messageCounter} / ${config.frequency} 轮`;
     }
 
-
-    // ========== 配置 ==========
+    // ================================================================
+    //  配置管理
+    // ================================================================
 
     function getDefaultConfig() {
         return {
@@ -221,16 +336,17 @@ window._asDebugWorldInfo = function () {
     }
 
     function loadConfig() {
-        const ctx = getContext();
-        if (!ctx.extensionSettings[EXT_NAME]) ctx.extensionSettings[EXT_NAME] = {};
-        config = Object.assign(getDefaultConfig(), ctx.extensionSettings[EXT_NAME]);
+        if (!window.extension_settings) window.extension_settings = {};
+        if (!window.extension_settings[EXT_NAME]) window.extension_settings[EXT_NAME] = {};
+        config = Object.assign(getDefaultConfig(), window.extension_settings[EXT_NAME]);
         log('配置已加载');
     }
 
     function saveConfig() {
-        const ctx = getContext();
-        ctx.extensionSettings[EXT_NAME] = { ...config };
-        if (ctx.saveSettingsDebounced) ctx.saveSettingsDebounced();
+        window.extension_settings[EXT_NAME] = { ...config };
+        if (typeof saveSettingsDebounced === 'function') {
+            saveSettingsDebounced();
+        }
     }
 
     function readUIConfig() {
@@ -269,7 +385,9 @@ window._asDebugWorldInfo = function () {
         $(`.as-chip[data-preset="${config.apiPreset}"]`).addClass('active');
     }
 
-    // ========== UI ==========
+    // ================================================================
+    //  UI 构建
+    // ================================================================
 
     function buildUI() {
         const html = `
@@ -280,7 +398,6 @@ window._asDebugWorldInfo = function () {
             </h4>
             <div class="as-body" id="as_body">
 
-                <!-- 楼层统计 -->
                 <div class="as-section-title">楼层统计</div>
                 <div class="as-stats">
                     <div class="as-stat-chip total">
@@ -309,7 +426,6 @@ window._asDebugWorldInfo = function () {
 
                 <hr class="as-divider">
 
-                <!-- 启用 -->
                 <div class="as-toggle-row">
                     <label for="as_enabled">启用自动总结</label>
                     <div class="as-switch">
@@ -320,7 +436,6 @@ window._asDebugWorldInfo = function () {
 
                 <hr class="as-divider">
 
-                <!-- API -->
                 <div class="as-section-title">API 配置</div>
                 <div class="as-control">
                     <label>快速预设</label>
@@ -356,7 +471,6 @@ window._asDebugWorldInfo = function () {
 
                 <hr class="as-divider">
 
-                <!-- 总结配置 -->
                 <div class="as-section-title">总结配置</div>
                 <div class="as-control">
                     <label for="as_frequency">自动触发频率（每 N 轮）</label>
@@ -402,7 +516,6 @@ window._asDebugWorldInfo = function () {
 
                 <hr class="as-divider">
 
-                <!-- 世界书 -->
                 <div class="as-section-title">世界书设置</div>
                 <div class="as-toggle-row">
                     <label for="as_wb_enabled">写入世界书</label>
@@ -415,14 +528,12 @@ window._asDebugWorldInfo = function () {
 
                 <hr class="as-divider">
 
-                <!-- 操作按钮 -->
                 <div class="as-buttons" id="as_action_buttons">
                     <button id="as_btn_summarize" class="as-btn-primary">⚡ 立即总结</button>
                     <button id="as_btn_history">📋 历史记录</button>
                     <button id="as_btn_reset">🔄 重置</button>
                 </div>
 
-                <!-- 确认区域 -->
                 <div class="as-confirm-section" id="as_confirm_section" style="display:none;">
                     <div class="as-confirm-title">⚡ 确认总结操作</div>
                     <div class="as-confirm-info" id="as_confirm_info"></div>
@@ -464,23 +575,22 @@ window._asDebugWorldInfo = function () {
         updateStats();
     }
 
-    // ========== UI 事件绑定 ==========
+    // ================================================================
+    //  UI 事件绑定
+    // ================================================================
 
     function bindUIEvents() {
-        // 折叠
         $('#as_panel_toggle').on('click', function () {
             $(this).toggleClass('collapsed');
             $('#as_body').toggleClass('collapsed');
         });
 
-        // 启用
         $('#as_enabled').on('change', function () {
             config.enabled = this.checked;
             saveConfig();
             setStatus(config.enabled ? '已启用' : '已禁用');
         });
 
-        // 预设
         $('#as_presets').on('click', '.as-chip', function () {
             const p = PRESETS[$(this).data('preset')];
             if (!p) return;
@@ -497,7 +607,6 @@ window._asDebugWorldInfo = function () {
             setTestResult('');
         });
 
-        // API 输入
         $('#as_api_url').on('input', function () {
             config.apiUrl = this.value.trim();
             config.apiPreset = 'custom';
@@ -505,11 +614,9 @@ window._asDebugWorldInfo = function () {
             $('.as-chip[data-preset="custom"]').addClass('active');
             saveConfig();
         });
-
         $('#as_api_key').on('input', function () { config.apiKey = this.value.trim(); saveConfig(); });
         $('#as_model').on('input', function () { config.model = this.value.trim(); saveConfig(); });
 
-        // URL 前缀
         $('#as_url_prefix').on('click', function () {
             const next = $(this).text().trim() === 'https://' ? 'http://' : 'https://';
             $(this).text(next);
@@ -517,7 +624,6 @@ window._asDebugWorldInfo = function () {
             saveConfig();
         });
 
-        // 测试
         $('#as_btn_test').on('click', async function () {
             const btn = $(this);
             btn.prop('disabled', true);
@@ -533,7 +639,6 @@ window._asDebugWorldInfo = function () {
             }
         });
 
-        // 滑块
         $('#as_frequency').on('input', function () {
             config.frequency = parseInt(this.value) || 10;
             $('#as_frequency_val').text(config.frequency);
@@ -551,7 +656,6 @@ window._asDebugWorldInfo = function () {
             saveConfig();
         });
 
-        // 风格
         $('#as_style').on('change', function () {
             config.style = this.value;
             $('#as_custom_prompt_wrap').css('display', config.style === 'custom' ? 'flex' : 'none');
@@ -559,11 +663,9 @@ window._asDebugWorldInfo = function () {
         });
         $('#as_custom_prompt').on('input', function () { config.customPrompt = this.value; saveConfig(); });
         $('#as_include_prev').on('change', function () { config.includePreviousSummary = this.checked; saveConfig(); });
-
-        // 世界书
         $('#as_wb_enabled').on('change', function () { config.worldBookEnabled = this.checked; saveConfig(); });
 
-        // ===== 立即总结 → 弹出确认 =====
+        // 立即总结 → 弹出确认
         $('#as_btn_summarize').on('click', function () {
             if (isProcessing || isConfirming) return;
             readUIConfig();
@@ -597,15 +699,12 @@ window._asDebugWorldInfo = function () {
             setStatus('已取消');
         });
 
-        // 确认 - 范围滑块
         $('#as_confirm_range').on('input', function () {
             updateConfirmRangeLabel();
         });
 
-        // 历史
         $('#as_btn_history').on('click', () => showHistoryModal());
 
-        // 重置
         $('#as_btn_reset').on('click', function () {
             messageCounter = 0;
             updateCounterDisplay();
@@ -613,30 +712,26 @@ window._asDebugWorldInfo = function () {
         });
     }
 
-    // ========== 确认弹窗 ==========
+    // ================================================================
+    //  确认弹窗
+    // ================================================================
 
     function showConfirm() {
-        const ctx = getContext();
-        const chat = ctx.chat || [];
         const realIndices = getRealMessageIndices();
         const lastIdx = getLastSummarizedIndex();
 
-        // 计算默认开始位置
         const defaultStart = Math.max(0, realIndices.length - config.contextMessages);
         const minStart = lastIdx >= 0 ? realIndices.findIndex(i => i > lastIdx) : 0;
         const validMin = Math.max(0, minStart);
 
-        // 设置滑块
         const slider = $('#as_confirm_range');
         slider.attr('min', validMin);
         slider.attr('max', realIndices.length);
         slider.val(defaultStart);
         slider.attr('step', 1);
 
-        // 设置风格
         $('#as_confirm_style').val(config.style);
 
-        // 信息文本
         const charName = getCharacterName();
         const newCount = realIndices.length - validMin;
         let infoHtml = `当前对话: <strong>${realIndices.length}</strong> 条消息`;
@@ -644,12 +739,10 @@ window._asDebugWorldInfo = function () {
             infoHtml += `，已总结至消息 #<strong>${lastIdx + 1}</strong>`;
         }
         infoHtml += `<br>角色: <strong>${escapeHtml(charName)}</strong> · 新消息: <strong>${newCount}</strong> 条`;
-
         $('#as_confirm_info').html(infoHtml);
 
         updateConfirmRangeLabel();
 
-        // 显示
         isConfirming = true;
         autoSummarizePaused = true;
         $('#as_action_buttons').hide();
@@ -673,12 +766,13 @@ window._asDebugWorldInfo = function () {
         $('#as_confirm_range_val').text(`${startMsg} → ${endMsg} (${count}条)`);
     }
 
-    // ========== API ==========
+    // ================================================================
+    //  API 调用
+    // ================================================================
 
     async function testAPIConnection(url, apiKey, model) {
         const headers = { 'Content-Type': 'application/json' };
         if (apiKey) headers['Authorization'] = 'Bearer ' + apiKey;
-
         const resp = await $.ajax({
             url,
             type: 'POST',
@@ -692,7 +786,6 @@ window._asDebugWorldInfo = function () {
             }),
             timeout: 15000
         });
-
         return resp.model || model;
     }
 
@@ -748,15 +841,25 @@ window._asDebugWorldInfo = function () {
         throw new Error('无法解析响应: ' + JSON.stringify(response).slice(0, 200));
     }
 
-    // ========== 消息内容构建 ==========
+    // ================================================================
+    //  总结内容构建
+    // ================================================================
+
+    function getSystemPrompt() {
+        if (config.style === 'custom' && config.customPrompt && config.customPrompt.trim()) {
+            return config.customPrompt.trim();
+        }
+        return STYLE_PROMPTS[config.style] || STYLE_PROMPTS.normal;
+    }
 
     function buildConversationText(startMsgIndex) {
-        const ctx = getContext();
-        const chat = ctx.chat || [];
-        const name1 = ctx.name1 || 'User';
-        const name2 = ctx.name2 || 'Character';
+        const chat = window.chat || [];
+        const name1 = window.name1 || 'User';
+        const name2 = window.name2 || 'Character';
 
-        const startIdx = (startMsgIndex !== undefined) ? startMsgIndex : Math.max(0, chat.length - config.contextMessages);
+        const startIdx = (startMsgIndex !== undefined)
+            ? startMsgIndex
+            : Math.max(0, chat.length - config.contextMessages);
         const messages = chat.slice(startIdx);
 
         let text = '';
@@ -776,107 +879,84 @@ window._asDebugWorldInfo = function () {
         return text.trim();
     }
 
-    function getSystemPrompt() {
-        if (config.style === 'custom' && config.customPrompt && config.customPrompt.trim()) {
-            return config.customPrompt.trim();
-        }
-        return STYLE_PROMPTS[config.style] || STYLE_PROMPTS.normal;
+    // ================================================================
+    //  保存总结（结构化存储）
+    // ================================================================
+
+    async function saveSummary(text, startIdx, endIdx) {
+        const state = getState();
+        const realInRange = getRealMessageIndices().filter(i => i >= startIdx && i <= endIdx);
+
+        state.summaries.push({
+            text: text,
+            timestamp: Date.now(),
+            startIndex: startIdx,
+            endIndex: endIdx,
+            messageRange: realInRange.length,
+            style: config.style,
+            model: config.model,
+            worldBookName: null,
+            worldBookFile: null,
+            worldBookSaved: false
+        });
+
+        await saveState(state);
+        log('总结已保存, 范围:', startIdx, '-', endIdx, '(' + realInRange.length + '条)');
     }
 
+    // ================================================================
+    //  世界书
+    // ================================================================
 
-    function getLastSummary() {
-        const ctx = getContext();
-        const summaries = (ctx.chat_metadata && ctx.chat_metadata.auto_summaries) || [];
-        return summaries.length > 0 ? summaries[summaries.length - 1] : null;
-    }
-
-    // ========== 世界书 ==========
-
-    /**
- * 创建世界书条目
- * 命名: Summary_角色名_日期_序号
- *
- * 通过 ST 前端 JS 对象直接操作，确保 UI 可见
- */
     async function createWorldBookEntry(summaryText, summaryIndex) {
         if (!config.worldBookEnabled) return;
 
         try {
-            const ctx = getContext();
             const charName = getCharacterName();
             const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
             const seq = String(summaryIndex + 1).padStart(3, '0');
             const entryName = `Summary_${charName}_${date}_${seq}`;
             const bookName = `AutoSummary_${charName.replace(/\s+/g, '_')}_${date}`;
 
-            // 关键词数组
             const keys = [charName, '总结', 'summary'];
             const nameParts = charName.split(/\s+/).filter(p => p.length > 1);
             for (const p of nameParts) {
                 if (!keys.includes(p)) keys.push(p);
             }
 
-            // ========================================
             // 获取 eventSource
-            // ========================================
-            let es = ctx.eventSource || (typeof eventSource !== 'undefined' ? eventSource : null);
+            let es = null;
+            if (typeof eventSource !== 'undefined' && eventSource && typeof eventSource.emit === 'function') {
+                es = eventSource;
+            }
 
-            // ========================================
-            // 获取世界书数据引用
-            // ========================================
+            // 获取世界书数据
             let wiData = null;
-
-            // 优先从 context 获取
-            if (ctx.world_info && typeof ctx.world_info === 'object') {
-                wiData = ctx.world_info;
-                log('使用 ctx.world_info');
-            }
-            // 全局 world_info
-            else if (typeof world_info !== 'undefined' && world_info) {
+            if (typeof world_info !== 'undefined' && world_info) {
                 wiData = world_info;
-                log('使用全局 world_info');
-            }
-            // 全局 world_info_data
-            else if (typeof world_info_data !== 'undefined' && world_info_data) {
+            } else if (typeof world_info_data !== 'undefined' && world_info_data) {
                 wiData = world_info_data;
-                log('使用全局 world_info_data');
             }
 
-            // ========================================
+            if (!wiData) {
+                logWarn('无法获取世界书数据');
+                return;
+            }
+
             // 确保世界书存在
-            // ========================================
-            let targetBookName = bookName;
-
-            // 如果 wiData 是按书名索引的对象结构
-            if (wiData && typeof wiData === 'object' && !wiData.entries) {
-                // 检查是否已有同名世界书
-                if (!wiData[bookName]) {
-                    wiData[bookName] = { entries: {} };
-                    log('在 wiData 中创建世界书:', bookName);
-                }
-                targetBookName = bookName;
-            }
-            // 如果 wiData 直接就是某个世界书对象（有 entries）
-            else if (wiData && wiData.entries) {
-                // 直接使用这个对象
-                targetBookName = bookName;
+            if (!wiData[bookName]) {
+                wiData[bookName] = { entries: {} };
             }
 
-            // ========================================
-            // 注册到 world_names（关键！UI 读取这个列表）
-            // ========================================
+            // 注册到 world_names
             if (typeof world_names !== 'undefined' && Array.isArray(world_names)) {
                 if (!world_names.includes(bookName)) {
                     world_names.push(bookName);
-                    log('已注册到 world_names:', bookName);
                 }
             }
 
-            // ========================================
             // 构建条目
-            // ========================================
             const entryUid = Date.now().toString();
-
             const newEntry = {
                 uid: entryUid,
                 keys: keys,
@@ -902,231 +982,63 @@ window._asDebugWorldInfo = function () {
                 delay: 0
             };
 
-            // ========================================
-            // 添加条目到世界书
-            // ========================================
+            // 添加条目
             let entryAdded = false;
-
-            // 获取目标 entries 容器
-            let entriesContainer = null;
-
-            if (wiData && wiData[targetBookName] && wiData[targetBookName].entries) {
-                entriesContainer = wiData[targetBookName].entries;
-            } else if (wiData && wiData.entries) {
-                entriesContainer = wiData.entries;
+            const entries = wiData[bookName].entries;
+            if (Array.isArray(entries)) {
+                entries.push(newEntry);
+                entryAdded = true;
+            } else if (typeof entries === 'object') {
+                entries[entryUid] = newEntry;
+                entryAdded = true;
             }
 
-            if (entriesContainer) {
-                if (Array.isArray(entriesContainer)) {
-                    entriesContainer.push(newEntry);
-                    entryAdded = true;
-                    log('条目已添加到数组 entries');
-                } else if (typeof entriesContainer === 'object') {
-                    entriesContainer[entryUid] = newEntry;
-                    entryAdded = true;
-                    log('条目已添加到对象 entries');
-                }
-            }
-
-            if (!entryAdded) {
-                logWarn('无法找到 entries 容器');
-                setStatus('世界书写入失败（总结已保存）', 'error');
-                return;
-            }
-
-            // ========================================
-            // 保存到服务器
-            // ========================================
-            try {
-                const resp = await $.ajax({
-                    url: '/api/worldinfo/edit',
-                    type: 'POST',
-                    contentType: 'application/json',
-                    data: JSON.stringify({
-                        name: bookName,
-                        data: wiData[bookName] || wiData
-                    }),
-                    timeout: 15000
-                });
-                log('通过 /api/worldinfo/edit 保存成功');
-            } catch (e1) {
-                logWarn('/api/worldinfo/edit 失败:', e1.status);
-                try {
-                    await $.ajax({
-                        url: '/api/worldinfo/save',
-                        type: 'POST',
-                        contentType: 'application/json',
-                        data: JSON.stringify({
-                            name: bookName,
-                            world: wiData[bookName] || wiData
-                        }),
-                        timeout: 15000
-                    });
-                    log('通过 /api/worldinfo/save 保存成功');
-                } catch (e2) {
-                    logWarn('HTTP 保存也失败，尝试内置函数');
-                }
-            }
-
-            // 内置保存函数兜底
-            const saveFnNames = [
-                'saveWorldInfo',
-                'saveWorldInfoData',
-                'saveWorldInfos',
-                'saveSettingsDebounced'
-            ];
-            for (const fnName of saveFnNames) {
-                if (typeof window[fnName] === 'function') {
-                    try {
-                        await window[fnName](bookName);
-                        log(`已调用 ${fnName}`);
-                    } catch (e) { }
-                }
-            }
-
-            // ========================================
-            // 触发 UI 刷新
-            // ========================================
-            if (es) {
-                try {
-                    // 尝试多种事件名
+            if (entryAdded) {
+                // 触发事件
+                if (es) {
                     const eventNames = [
-                        'worldinfoUpdated',
-                        'worldInfoUpdated',
-                        'WORLDINFO_UPDATED',
-                        'WORLD_INFO_UPDATED',
-                        'worldInfoUpdated',
-                        'worldUpdated'
+                        'worldinfoUpdated', 'worldInfoUpdated',
+                        'WORLDINFO_UPDATED', 'WORLD_INFO_UPDATED'
                     ];
                     for (const evtName of eventNames) {
-                        try {
-                            es.emit(evtName, { name: bookName });
-                            log('触发事件:', evtName);
-                            break;
-                        } catch (e) { }
-                    }
-                } catch (e) {
-                    logWarn('事件触发失败:', e);
-                }
-            }
-
-            // 刷新世界书下拉菜单
-            try {
-                if (typeof updateWorldInfoList === 'function') {
-                    updateWorldInfoList();
-                }
-                if (typeof loadWorldInfo === 'function') {
-                    await loadWorldInfo();
-                }
-                // 刷新角色编辑面板的世界书选择器
-                if (typeof updateWorldInfoSelect === 'function') {
-                    updateWorldInfoSelect();
-                }
-            } catch (e) {
-                logWarn('刷新 UI 失败:', e);
-            }
-
-            // ========================================
-            // 绑定世界书到当前角色
-            // ========================================
-            try {
-                const charData = ctx.characters?.[ctx.this_chid];
-                const currentWorld = charData?.data?.extensions?.world;
-
-                // 如果角色没有绑定世界书，自动绑定
-                if (!currentWorld || !currentWorld.trim()) {
-                    if (charData && charData.data) {
-                        if (!charData.data.extensions) charData.data.extensions = {};
-                        charData.data.extensions.world = bookName;
-                        log('已将世界书绑定到角色:', bookName);
-
-                        // 保存角色数据
-                        try {
-                            await $.ajax({
-                                url: '/api/characters/edit',
-                                type: 'POST',
-                                contentType: 'application/json',
-                                data: JSON.stringify({
-                                    avatar: charData.avatar,
-                                    data: charData.data
-                                }),
-                                timeout: 15000
-                            });
-                            log('角色数据已保存');
-                        } catch (e) {
-                            logWarn('保存角色数据失败:', e);
-                        }
+                        try { es.emit(evtName, { name: bookName }); break; } catch (e) {}
                     }
                 }
-            } catch (e) {
-                logWarn('绑定世界书到角色失败:', e);
+
+                // 保存
+                const saveFnNames = ['saveWorldInfo', 'saveWorldInfoData', 'saveWorldInfos'];
+                for (const fn of saveFnNames) {
+                    if (typeof window[fn] === 'function') {
+                        try { await window[fn](bookName); } catch (e) {}
+                    }
+                }
+
+                log('世界书条目已创建:', entryName, '→', bookName);
             }
 
-            // ========================================
-            // 记录结果
-            // ========================================
-            const ctx2 = getContext();
-            const summaries = (ctx2.chat_metadata || {}).auto_summaries || [];
-            if (summaries.length > 0) {
-                summaries[summaries.length - 1].worldBookName = entryName;
-                summaries[summaries.length - 1].worldBookFile = bookName;
-                summaries[summaries.length - 1].worldBookSaved = entryAdded;
+            // 记录到总结数据
+            const state = getState();
+            if (state.summaries.length > 0) {
+                const last = state.summaries[state.summaries.length - 1];
+                last.worldBookName = entryName;
+                last.worldBookFile = bookName;
+                last.worldBookSaved = entryAdded;
+                await saveState(state);
             }
-
-            log('世界书条目已创建:', entryName, '→', bookName);
-            setStatus('总结完成，世界书已更新！', 'success');
 
         } catch (e) {
             logWarn('世界书操作异常:', e);
         }
     }
 
-
-
-
-    // ========== 保存总结 ==========
-
-    async function saveSummary(text, startIdx, endIdx) {
-        const ctx = getContext();
-
-        // 双重保险初始化
-        if (!ctx.chat_metadata) ctx.chat_metadata = {};
-        if (!ctx.chat_metadata.auto_summaries) ctx.chat_metadata.auto_summaries = [];
-
-        const realInRange = getRealMessageIndices().filter(i => i >= startIdx && i <= endIdx);
-
-        ctx.chat_metadata.auto_summaries.push({
-            text: text,
-            timestamp: Date.now(),
-            startIndex: startIdx,
-            endIndex: endIdx,
-            messageRange: realInRange.length,
-            style: config.style,
-            model: config.model,
-            worldBookName: null,
-            worldBookFile: null
-        });
-
-        try {
-            if (typeof ctx.saveMetadata === 'function') {
-                await ctx.saveMetadata();
-            } else if (typeof saveMetadata === 'function') {
-                await saveMetadata();
-            }
-            log('总结已保存, 范围:', startIdx, '-', endIdx, '(' + realInRange.length + '条)');
-        } catch (e) {
-            logWarn('保存元数据失败:', e);
-        }
-    }
-
-
-    // ========== 执行总结 ==========
+    // ================================================================
+    //  执行总结
+    // ================================================================
 
     async function executeSummary(startMsgIndex, style) {
         if (isProcessing) throw new Error('正在处理中');
 
-        const ctx = getContext();
-        const chat = ctx.chat || [];
+        const chat = window.chat || [];
         if (chat.length < 2) {
             setStatus('对话太少，跳过总结');
             return;
@@ -1135,7 +1047,6 @@ window._asDebugWorldInfo = function () {
             throw new Error('请先配置 API');
         }
 
-        // 确定范围
         const realIndices = getRealMessageIndices();
         const lastIdx = getLastSummarizedIndex();
         const validStart = lastIdx >= 0 ? realIndices.findIndex(i => i > lastIdx) : 0;
@@ -1144,7 +1055,6 @@ window._asDebugWorldInfo = function () {
             : Math.max(validStart, realIndices.length - config.contextMessages);
         const endIdx = chat.length - 1;
 
-        // 临时覆盖风格
         const origStyle = config.style;
         if (style) config.style = style;
 
@@ -1172,9 +1082,8 @@ window._asDebugWorldInfo = function () {
             await saveSummary(summary.trim(), startIdx, endIdx);
 
             // 写入世界书
-            const ctx2 = getContext();
-            const summaryIndex = (ctx2.chat_metadata.auto_summaries || []).length - 1;
-            await createWorldBookEntry(summary.trim(), summaryIndex);
+            const state = getState();
+            await createWorldBookEntry(summary.trim(), state.summaries.length - 1);
 
             setStatus('总结完成！', 'success');
             updateStats();
@@ -1189,7 +1098,9 @@ window._asDebugWorldInfo = function () {
         }
     }
 
-    // ========== 事件监听 ==========
+    // ================================================================
+    //  事件监听与轮询
+    // ================================================================
 
     function checkAndSummarize() {
         if (!config.enabled || isProcessing || isConfirming || autoSummarizePaused) return;
@@ -1198,17 +1109,17 @@ window._asDebugWorldInfo = function () {
             log(`达到触发条件 (${messageCounter} >= ${config.frequency})`);
             messageCounter = 0;
             updateCounterDisplay();
-            // 自动总结也弹确认
             showConfirm();
         }
     }
 
     function bindEvents() {
         if (eventBound) return;
-        const ctx = getContext();
-        const es = ctx.eventSource;
+
+        const es = (typeof eventSource !== 'undefined') ? eventSource : null;
 
         if (es && typeof es.on === 'function') {
+            // 消息事件
             for (const evt of ['messageReceived', 'messageSent', 'MESSAGE_RECEIVED', 'MESSAGE_SENT']) {
                 try {
                     es.on(evt, () => {
@@ -1217,60 +1128,81 @@ window._asDebugWorldInfo = function () {
                             updateCounterDisplay();
                             updateStats();
                             checkAndSummarize();
-                        }, 500);
+                        }, 600);
                     });
                     log('绑定:', evt);
-                } catch (e) { }
+                } catch (e) {}
             }
-            for (const evt of ['chatLoaded', 'CHAT_CHANGED', 'chatChanged']) {
+
+            // 聊天切换事件
+            for (const evt of ['chatLoaded', 'CHAT_CHANGED', 'chatChanged', 'chat_id_changed']) {
                 try {
                     es.on(evt, () => {
                         setTimeout(() => {
+                            syncState();
                             messageCounter = 0;
                             updateCounterDisplay();
                             updateStats();
                             log('聊天切换:', evt);
-                        }, 1000);
+                        }, 1200);
                     });
                     log('绑定:', evt);
-                } catch (e) { }
+                } catch (e) {}
             }
+
+            // 新消息事件
+            for (const evt of ['message_swiped', 'MESSAGE_SWIPED', 'message_edited', 'MESSAGE_EDITED']) {
+                try {
+                    es.on(evt, () => {
+                        setTimeout(() => {
+                            updateStats();
+                        }, 500);
+                    });
+                } catch (e) {}
+            }
+
             eventBound = true;
         } else {
-            logWarn('eventSource 不可用，使用 DOM Observer');
-            startDOMObserver();
+            logWarn('eventSource 不可用');
         }
+
+        // 启动轮询作为备份（每 3 秒刷新统计）
+        if (!pollInterval) {
+            pollInterval = setInterval(() => {
+                updateStats();
+            }, 3000);
+            log('轮询已启动 (3s)');
+        }
+
+        // DOM Observer 备用
+        startDOMObserver();
     }
 
     function startDOMObserver() {
-        const el = document.getElementById('chat') || document.querySelector('.mes');
+        const el = document.getElementById('chat');
         if (!el) return;
         const target = el.parentElement || el;
-        new MutationObserver(function (mutations) {
-            let hasNew = false;
-            for (const m of mutations) {
-                for (const n of m.addedNodes) {
-                    if (n.nodeType === 1 && n.classList && n.classList.contains('mes')) {
-                        hasNew = true; break;
-                    }
-                }
-                if (hasNew) break;
-            }
-            if (hasNew) {
+
+        let debounceTimer = null;
+        new MutationObserver(function () {
+            if (debounceTimer) clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
                 messageCounter++;
                 updateCounterDisplay();
                 updateStats();
                 checkAndSummarize();
-            }
+            }, 800);
         }).observe(target, { childList: true, subtree: true });
         log('DOM Observer 已启动');
     }
 
-    // ========== 历史弹窗 ==========
+    // ================================================================
+    //  历史弹窗
+    // ================================================================
 
     function showHistoryModal() {
-        const ctx = getContext();
-        const summaries = (ctx.chat_metadata || {}).auto_summaries || [];
+        const state = getState();
+        const summaries = state.summaries;
         $('.as-modal-overlay').remove();
 
         let entries = '';
@@ -1340,30 +1272,40 @@ window._asDebugWorldInfo = function () {
 
         $('#as_clear_summaries').on('click', async function () {
             if (!confirm('确定清除所有总结？此操作不可撤销。')) return;
-            const ctx2 = getContext();
-            if (ctx2.chat_metadata) {
-                ctx2.chat_metadata.auto_summaries = [];
-                if (typeof ctx2.saveMetadata === 'function') await ctx2.saveMetadata();
-            }
+            const state2 = getState();
+            state2.summaries = [];
+            state2.messageCounter = 0;
+            await saveState(state2);
+            messageCounter = 0;
             modal.remove();
             updateStats();
+            updateCounterDisplay();
             setStatus('已清除所有总结');
         });
     }
 
-    // ========== 初始化 ==========
+    // ================================================================
+    //  初始化
+    // ================================================================
 
     async function init() {
         try {
             if (typeof $ === 'undefined') { await sleep(1000); return init(); }
 
             loadConfig();
+
+            // 初始化聊天 ID
+            currentChatId = resolveChatId();
+            log('当前聊天 ID:', currentChatId);
+
+            // 同步已有数据
+            syncState();
+
             buildUI();
 
             await sleep(2000);
             bindEvents();
 
-            // 重新计数
             messageCounter = 0;
             updateCounterDisplay();
             updateStats();
