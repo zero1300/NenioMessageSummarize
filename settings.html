@@ -5,7 +5,6 @@
     </h4>
 
     <div class="as-body" id="as_body">
-
         <!-- 楼层统计 -->
         <div class="as-section-title">楼层统计</div>
         <div class="as-stats" id="as_stats">
@@ -103,9 +102,9 @@
         <div class="as-control">
             <label for="as_style">总结风格</label>
             <select id="as_style">
-                <option value="brief">简短 — 一句话概括</option>
-                <option value="normal" selected>标准 — 段落式总结</option>
-                <option value="detailed">详细 — 完整情节梳理</option>
+                <option value="brief">简短 - 一句话概括</option>
+                <option value="normal" selected>标准 - 段落式总结</option>
+                <option value="detailed">详细 - 完整情节梳理</option>
                 <option value="custom">自定义提示词</option>
             </select>
         </div>
@@ -136,8 +135,7 @@
 
         <div class="as-control" id="as_custom_prompt_wrap" style="display:none;">
             <label for="as_custom_prompt">自定义系统提示词</label>
-            <textarea id="as_custom_prompt" rows="3"
-                placeholder="例如：请用中文总结以下对话，重点记录角色的情感变化和关键事件。"></textarea>
+            <textarea id="as_custom_prompt" rows="3" placeholder="例如：请用中文总结以下对话，重点记录角色的情感变化和关键事件。"></textarea>
         </div>
 
         <hr class="as-divider">
@@ -172,7 +170,7 @@
             <div class="as-confirm-info" id="as_confirm_info"></div>
 
             <div class="as-control">
-                <label for="as_confirm_range">总结范围（消息索引）</label>
+                <label for="as_confirm_range">总结范围（起始消息）</label>
                 <div class="as-slider-row">
                     <input type="range" id="as_confirm_range" min="0" max="100" value="0" step="1">
                     <span class="as-slider-val" id="as_confirm_range_val">-</span>
@@ -180,7 +178,7 @@
             </div>
 
             <div class="as-control">
-                <label for="as_confirm_style">总结风格</label>
+                <label for="as_confirm_style">本次总结风格</label>
                 <select id="as_confirm_style">
                     <option value="brief">简短</option>
                     <option value="normal">标准</option>
