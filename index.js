@@ -230,9 +230,9 @@ function makeCapsuleMessage(record) {
     return {
         name: "Memory Capsule",
         is_user: false,
-        is_system: true,
+        is_system: false,
         send_date: Date.now(),
-        mes: `${MARKER_PREFIX} #${record.seqEnd}\n覆盖楼层 #${record.seqStart} - #${record.seqEnd}（${record.messageCount} 条）\n${record.summary}`,
+        mes: `${MARKER_PREFIX}\n覆盖楼层 #${record.seqStart} - #${record.seqEnd}（${record.messageCount} 条）\n${record.summary}`,
         extra: {
             [MODULE_NAME]: {
                 isCapsule: true,
