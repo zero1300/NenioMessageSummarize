@@ -60,6 +60,48 @@
         }
     }
 
+    function getSTContext() {
+        try {
+            if (typeof SillyTavern !== 'undefined' && typeof SillyTavern.getContext === 'function') {
+                return SillyTavern.getContext();
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    function getChat() {
+        const ctx = getSTContext();
+        if (ctx && Array.isArray(ctx.chat)) return ctx.chat;
+        if (Array.isArray(window.chat)) return window.chat;
+        return [];
+    }
+
+    function getChatMetadata() {
+        const ctx = getSTContext();
+        if (ctx && ctx.chatMetadata) return ctx.chatMetadata;
+        return window.chat_metadata || {};
+    }
+
+    function getCharacters() {
+        const ctx = getSTContext();
+        if (ctx && ctx.characters) return ctx.characters;
+        return window.characters;
+    }
+
+    function getCharacterId() {
+        const ctx = getSTContext();
+        if (ctx && ctx.characterId !== undefined && ctx.characterId !== null) return ctx.characterId;
+        return window.this_chid;
+    }
+
+    function getPersonaNames() {
+        const ctx = getSTContext();
+        return {
+            user: ctx?.name1 || window.name1 || 'User',
+            character: ctx?.name2 || window.name2 || 'Character',
+        };
+    }
+
     function escapeHtml(text) {
         const div = document.createElement('div');
         div.textContent = String(text ?? '');
@@ -108,11 +150,15 @@
     }
 
     function resolveChatId() {
-        const meta = window.chat_metadata || {};
-        const charId = window.this_chid;
+        const meta = getChatMetadata();
+        const charId = getCharacterId();
+        const ctx = getSTContext();
 
         if (meta.file_name && typeof meta.file_name === 'string' && meta.file_name.trim()) {
             return meta.file_name.trim();
+        }
+        if (ctx?.chatId) {
+            return String(ctx.chatId);
         }
         if (charId !== undefined && charId !== null && charId !== '') {
             return 'char_' + String(charId);
@@ -160,7 +206,7 @@
         let state = loadStateFromLocal(chatId);
 
         if (!state) {
-            const meta = window.chat_metadata || {};
+            const meta = getChatMetadata();
             const summaries = Array.isArray(meta.auto_summaries) ? meta.auto_summaries : [];
             if (summaries.length > 0) {
                 state = getEmptyState();
@@ -186,11 +232,15 @@
         if (!window.chat_metadata) window.chat_metadata = {};
         window.chat_metadata.auto_summaries = state.summaries.slice();
 
+        const ctx = getSTContext();
+        if (ctx?.chatMetadata) {
+            ctx.chatMetadata.auto_summaries = state.summaries.slice();
+        }
+
         try {
             if (typeof saveMetadata === 'function') {
                 await saveMetadata();
-            } else if (typeof SillyTavern !== 'undefined') {
-                const ctx = SillyTavern.getContext?.();
+            } else if (ctx?.saveMetadata) {
                 if (ctx?.saveMetadata) await ctx.saveMetadata();
             }
         } catch (e) {
@@ -210,12 +260,16 @@
         const state = loadStateFromLocal(currentChatId);
         if (state?.summaries?.length) {
             window.chat_metadata.auto_summaries = state.summaries.slice();
+            const ctx = getSTContext();
+            if (ctx?.chatMetadata) {
+                ctx.chatMetadata.auto_summaries = state.summaries.slice();
+            }
         }
         lastObservedMessageCount = getRealMessageIndices().length;
     }
 
     function getRealMessageIndices() {
-        const chat = window.chat || [];
+        const chat = getChat();
         const indices = [];
         for (let i = 0; i < chat.length; i++) {
             if (!chat[i]?.is_system) indices.push(i);
@@ -224,12 +278,12 @@
     }
 
     function getCharacterName() {
-        const chars = window.characters;
-        const chid = window.this_chid;
+        const chars = getCharacters();
+        const chid = getCharacterId();
         if (chars && chid !== undefined && chars[chid]) {
             return chars[chid].name || 'Unknown';
         }
-        return window.name2 || 'Unknown';
+        return getPersonaNames().character;
     }
 
     function getLastSummary() {
@@ -821,9 +875,10 @@
     }
 
     function buildConversationText(startMsgIndex) {
-        const chat = window.chat || [];
-        const name1 = window.name1 || 'User';
-        const name2 = window.name2 || 'Character';
+        const chat = getChat();
+        const names = getPersonaNames();
+        const name1 = names.user;
+        const name2 = names.character;
         const startIndex = startMsgIndex !== undefined
             ? startMsgIndex
             : Math.max(0, chat.length - config.contextMessages);
@@ -969,7 +1024,7 @@
     async function executeSummary(startMsgIndex, style) {
         if (isProcessing) throw new Error('正在处理中');
 
-        const chat = window.chat || [];
+        const chat = getChat();
         if (chat.length < 2) {
             setStatus('对话太少，跳过总结');
             return;
