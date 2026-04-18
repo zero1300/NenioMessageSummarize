@@ -39,7 +39,7 @@
                 </div>
 
                 <div class="amc-row">
-                    <label for="amc_compact_enabled">自动把旧消息压缩成记忆胶囊</label>
+                    <label for="amc_compact_enabled">在生成时用记忆胶囊替换旧上下文</label>
                     <input id="amc_compact_enabled" type="checkbox" />
                 </div>
 
@@ -52,18 +52,18 @@
                 </div>
 
                 <div class="amc-field">
-                    <label for="amc_keep_recent">始终保留最近原始楼层</label>
-                    <div class="amc-slider-row">
-                        <input id="amc_keep_recent" type="range" min="2" max="20" step="1" />
-                        <span id="amc_keep_recent_value">6</span>
-                    </div>
-                </div>
-
-                <div class="amc-field">
                     <label for="amc_keep_head">始终保留最开始原始楼层</label>
                     <div class="amc-slider-row">
                         <input id="amc_keep_head" type="range" min="0" max="20" step="1" />
                         <span id="amc_keep_head_value">0</span>
+                    </div>
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_keep_recent">始终保留最近原始楼层</label>
+                    <div class="amc-slider-row">
+                        <input id="amc_keep_recent" type="range" min="2" max="20" step="1" />
+                        <span id="amc_keep_recent_value">6</span>
                     </div>
                 </div>
 
@@ -88,7 +88,7 @@
                 </div>
 
                 <div class="amc-actions">
-                    <button id="amc_btn_run" class="menu_button">立即压缩当前可归档消息</button>
+                    <button id="amc_btn_run" class="menu_button">立即生成一条新胶囊</button>
                     <button id="amc_btn_history" class="menu_button">查看胶囊历史</button>
                     <button id="amc_btn_reset" class="menu_button">重置当前聊天状态</button>
                 </div>

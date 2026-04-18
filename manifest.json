@@ -1,5 +1,5 @@
 {
-    "display_name": "自动记忆胶囊",
+    "display_name": "Auto Memory Capsule",
     "loading_order": 25,
     "auto_update": false,
     "requires": [],
@@ -7,8 +7,9 @@
     "dependencies": [],
     "js": "index.js",
     "css": "style.css",
+    "generate_interceptor": "autoMemoryCapsuleInterceptor",
     "author": "MiMo + Codex rewrite",
-    "version": "2.0.0",
+    "version": "2.1.0",
     "homePage": "",
     "update": ""
 }

@@ -1,15 +1,15 @@
-import { generateQuietPrompt } from "../../../../script.js";
-
 const MODULE_NAME = "auto_memory_capsule";
-const LOG_PREFIX = "[AutoMemoryCapsule]";
+const INTERCEPTOR_NAME = "autoMemoryCapsuleInterceptor";
 const TEMPLATE_NAME = "settings";
+const LOG_PREFIX = "[AutoMemoryCapsule]";
+const MARKER_PREFIX = "【记忆胶囊】";
 
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     compactEnabled: true,
     threshold: 12,
-    keepRecent: 6,
     keepHead: 0,
+    keepRecent: 6,
     summaryStyle: "balanced",
     includePrevious: true,
     customPrompt: "",
@@ -17,16 +17,15 @@ const DEFAULT_SETTINGS = Object.freeze({
 
 const STYLE_PROMPTS = Object.freeze({
     brief: "请把以下对话压缩成一条非常简洁但信息完整的长期记忆。重点保留关键事件、人物关系、未完成目标和重要承诺。只输出总结正文。",
-    balanced: "请把以下对话压缩成一条适合长期记忆的总结。保留：关键事件、人物关系变化、正在推进的目标、情绪变化、线索和承诺。避免无关措辞。只输出总结正文。",
-    detailed: "请详细总结以下对话，并保留可供后续续写使用的长期记忆信息，包括：1. 关键事件；2. 人物关系与立场变化；3. 当前目标与障碍；4. 伏笔、秘密、承诺；5. 当前场景状态。只输出总结正文。",
+    balanced: "请把以下对话压缩成一条适合长期记忆的总结。保留关键事件、人物关系变化、正在推进的目标、情绪变化、线索和承诺。只输出总结正文。",
+    detailed: "请详细总结以下对话，并保留可供后续续写使用的长期记忆信息，包括关键事件、人物关系变化、当前目标与障碍、伏笔秘密和承诺、当前场景状态。只输出总结正文。",
 });
-
-const MARKER_PREFIX = "【记忆胶囊】";
 
 let settings = null;
 let initialized = false;
 let processing = false;
 let scheduledRefresh = null;
+let summaryGenerationDepth = 0;
 
 function log(...args) {
     console.log(LOG_PREFIX, ...args);
@@ -47,12 +46,18 @@ function getExtensionFolder() {
     try {
         const path = new URL(import.meta.url).pathname;
         const marker = "/scripts/extensions/";
-        const idx = path.indexOf(marker);
-        if (idx >= 0) {
-            return path.slice(idx + marker.length).replace(/\/index\.js$/, "").replace(/^\/+/, "");
+        const index = path.indexOf(marker);
+        if (index >= 0) {
+            return path.slice(index + marker.length).replace(/\/index\.js$/, "").replace(/^\/+/, "");
         }
     } catch (e) {}
     return "third-party/NenioMessageSummarize";
+}
+
+function escapeHtml(text) {
+    const div = document.createElement("div");
+    div.textContent = String(text ?? "");
+    return div.innerHTML;
 }
 
 function getSettings() {
@@ -86,7 +91,7 @@ function getChatState() {
     const meta = ctx.chatMetadata ?? window.chat_metadata ?? {};
     if (!meta[MODULE_NAME]) {
         meta[MODULE_NAME] = {
-            version: 2,
+            version: 3,
             summarizedUntil: 0,
             records: [],
         };
@@ -109,68 +114,11 @@ async function saveChatMetadata() {
     }
 }
 
-async function persistChatMutation() {
-    const ctx = getContext();
-    for (const name of ["saveChat", "saveCurrentChat", "saveChatConditional", "saveCurrentChatConditional"]) {
-        if (typeof ctx[name] === "function") {
-            try {
-                await ctx[name]();
-                return;
-            } catch (e) {
-                warn(`Failed ${name}:`, e);
-            }
-        }
-    }
-}
-
-function isCapsuleMessage(message) {
-    return !!message?.extra?.[MODULE_NAME]?.isCapsule;
-}
-
-function getCapsuleMeta(message) {
-    return message?.extra?.[MODULE_NAME] || null;
-}
-
-function getLogicalMessageMap() {
-    const chat = getContext().chat || [];
-    const map = [];
-    let logicalIndex = 0;
-
-    for (let actualIndex = 0; actualIndex < chat.length; actualIndex++) {
-        const message = chat[actualIndex];
-        if (!message) continue;
-
-        if (isCapsuleMessage(message)) {
-            logicalIndex += Number(getCapsuleMeta(message)?.coveredCount || 0);
-            continue;
-        }
-
-        if (message.is_system) continue;
-
-        logicalIndex += 1;
-        map.push({
-            logicalIndex,
-            actualIndex,
-            message,
-        });
-    }
-
-    return {
-        map,
-        totalLogicalCount: logicalIndex,
-    };
-}
-
-function getPendingRawMessages() {
-    const state = getChatState();
-    const { map, totalLogicalCount } = getLogicalMessageMap();
-    const keepHead = Number(settings.keepHead || 0);
-    const pending = map.filter(item => item.logicalIndex > state.summarizedUntil && item.logicalIndex > keepHead);
-    return {
-        pending,
-        totalLogicalCount,
-        summarizedUntil: state.summarizedUntil,
-    };
+function isCompressibleMessage(message) {
+    if (!message) return false;
+    if (message.is_system) return false;
+    if (message.extra?.[MODULE_NAME]?.isPromptCapsule) return false;
+    return true;
 }
 
 function getPersonaNames() {
@@ -190,14 +138,49 @@ function getCharacterName() {
     return getPersonaNames().character;
 }
 
+function buildLogicalMap(chat) {
+    const map = [];
+    let logicalIndex = 0;
+
+    for (let actualIndex = 0; actualIndex < chat.length; actualIndex++) {
+        const message = chat[actualIndex];
+        if (!isCompressibleMessage(message)) continue;
+        logicalIndex += 1;
+        map.push({
+            logicalIndex,
+            actualIndex,
+            message,
+        });
+    }
+
+    return {
+        map,
+        totalLogicalCount: logicalIndex,
+    };
+}
+
+function getPendingRawMessages(chat) {
+    const state = getChatState();
+    const { map, totalLogicalCount } = buildLogicalMap(chat);
+    const keepHead = Number(settings.keepHead || 0);
+    const pending = map.filter(item => item.logicalIndex > state.summarizedUntil && item.logicalIndex > keepHead);
+    return {
+        map,
+        pending,
+        totalLogicalCount,
+        summarizedUntil: state.summarizedUntil,
+    };
+}
+
 function buildSummaryPrompt(recordInput, previousSummary, style) {
     const basePrompt = style === "custom" && settings.customPrompt.trim()
         ? settings.customPrompt.trim()
         : STYLE_PROMPTS[style] || STYLE_PROMPTS.balanced;
 
+    const names = getPersonaNames();
     let transcript = "";
     for (const item of recordInput) {
-        const sender = item.message.is_user ? getPersonaNames().user : (item.message.name || getPersonaNames().character);
+        const sender = item.message.is_user ? names.user : (item.message.name || names.character);
         transcript += `#${item.logicalIndex} ${sender}: ${item.message.mes || ""}\n\n`;
     }
 
@@ -209,8 +192,18 @@ function buildSummaryPrompt(recordInput, previousSummary, style) {
 }
 
 async function generateSummary(prompt) {
-    const result = await generateQuietPrompt({ quietPrompt: prompt });
-    return String(result || "").trim();
+    const ctx = getContext();
+    if (typeof ctx.generateQuietPrompt !== "function") {
+        throw new Error("generateQuietPrompt unavailable");
+    }
+
+    summaryGenerationDepth += 1;
+    try {
+        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        return String(result || "").trim();
+    } finally {
+        summaryGenerationDepth = Math.max(0, summaryGenerationDepth - 1);
+    }
 }
 
 function makeRecord(recordInput, summaryText) {
@@ -223,23 +216,21 @@ function makeRecord(recordInput, summaryText) {
         messageCount: recordInput.length,
         summary: summaryText,
         createdAt: Date.now(),
-        compacted: settings.compactEnabled,
         style: settings.summaryStyle,
     };
 }
 
-function makeCapsuleMessage(record) {
+function makePromptCapsuleMessage(record) {
     return {
         name: "Memory Capsule",
         is_user: false,
         is_system: false,
-        send_date: Date.now(),
         mes: `${MARKER_PREFIX}\n覆盖楼层 #${record.seqStart} - #${record.seqEnd}（${record.messageCount} 条）\n${record.summary}`,
+        send_date: Date.now(),
         extra: {
             [MODULE_NAME]: {
-                isCapsule: true,
+                isPromptCapsule: true,
                 recordId: record.id,
-                coveredCount: record.messageCount,
                 seqStart: record.seqStart,
                 seqEnd: record.seqEnd,
             },
@@ -247,20 +238,10 @@ function makeCapsuleMessage(record) {
     };
 }
 
-async function compactChatRange(record, recordInput) {
-    if (!settings.compactEnabled) return;
-    const chat = getContext().chat || [];
-    const firstActual = recordInput[0].actualIndex;
-    const deleteCount = recordInput.length;
-    chat.splice(firstActual, deleteCount, makeCapsuleMessage(record));
-    await persistChatMutation();
-}
+async function createCapsuleFromChat(chat, force = false) {
+    if (processing || !settings.enabled) return false;
 
-async function createCapsuleFromPending(force = false) {
-    if (processing) return false;
-    if (!settings.enabled) return false;
-
-    const { pending } = getPendingRawMessages();
+    const { pending } = getPendingRawMessages(chat);
     const threshold = Number(settings.threshold);
     const keepRecent = Number(settings.keepRecent);
     const eligibleCount = pending.length - keepRecent;
@@ -280,7 +261,7 @@ async function createCapsuleFromPending(force = false) {
     if (!recordInput.length) return false;
 
     processing = true;
-    setStatus(`正在压缩楼层 #${recordInput[0].logicalIndex} - #${recordInput[recordInput.length - 1].logicalIndex} ...`, "info");
+    setStatus(`正在生成 #${recordInput[0].logicalIndex} - #${recordInput[recordInput.length - 1].logicalIndex} 的记忆胶囊...`, "info");
 
     try {
         const state = getChatState();
@@ -295,15 +276,13 @@ async function createCapsuleFromPending(force = false) {
         const record = makeRecord(recordInput, summary);
         state.records.push(record);
         state.summarizedUntil = record.seqEnd;
-
-        await compactChatRange(record, recordInput);
         await saveChatMetadata();
         refreshUi();
         setStatus(`已生成记忆胶囊，覆盖 #${record.seqStart} - #${record.seqEnd}`, "success");
         return true;
     } catch (error) {
         warn("Capsule generation failed:", error);
-        setStatus(`压缩失败：${error.message || error}`, "error");
+        setStatus(`生成失败：${error.message || error}`, "error");
         return false;
     } finally {
         processing = false;
@@ -311,12 +290,12 @@ async function createCapsuleFromPending(force = false) {
 }
 
 function getStats() {
+    const chat = getContext().chat || [];
     const state = getChatState();
-    const { totalLogicalCount } = getLogicalMessageMap();
+    const { totalLogicalCount } = buildLogicalMap(chat);
     const pendingCount = Math.max(0, totalLogicalCount - state.summarizedUntil);
     const archivedCount = state.records.reduce((sum, record) => sum + (record.messageCount || 0), 0);
     const percent = totalLogicalCount > 0 ? Math.round((archivedCount / totalLogicalCount) * 100) : 0;
-
     return {
         totalLogicalCount,
         pendingCount,
@@ -347,10 +326,10 @@ function refreshUi() {
     $("#amc_compact_enabled").prop("checked", settings.compactEnabled);
     $("#amc_threshold").val(settings.threshold);
     $("#amc_threshold_value").text(settings.threshold);
-    $("#amc_keep_recent").val(settings.keepRecent);
-    $("#amc_keep_recent_value").text(settings.keepRecent);
     $("#amc_keep_head").val(settings.keepHead);
     $("#amc_keep_head_value").text(settings.keepHead);
+    $("#amc_keep_recent").val(settings.keepRecent);
+    $("#amc_keep_recent_value").text(settings.keepRecent);
     $("#amc_summary_style").val(settings.summaryStyle);
     $("#amc_include_previous").prop("checked", settings.includePrevious);
     $("#amc_custom_prompt").val(settings.customPrompt);
@@ -375,15 +354,16 @@ function bindUiEvents() {
         saveSettings();
     });
 
-    $("#amc_keep_recent").on("input", function () {
-        settings.keepRecent = Number(this.value) || DEFAULT_SETTINGS.keepRecent;
-        $("#amc_keep_recent_value").text(settings.keepRecent);
-        saveSettings();
-    });
-
     $("#amc_keep_head").on("input", function () {
         settings.keepHead = Number(this.value) || 0;
         $("#amc_keep_head_value").text(settings.keepHead);
+        saveSettings();
+        refreshUi();
+    });
+
+    $("#amc_keep_recent").on("input", function () {
+        settings.keepRecent = Number(this.value) || DEFAULT_SETTINGS.keepRecent;
+        $("#amc_keep_recent_value").text(settings.keepRecent);
         saveSettings();
         refreshUi();
     });
@@ -404,7 +384,7 @@ function bindUiEvents() {
     });
 
     $("#amc_btn_run").on("click", async () => {
-        await createCapsuleFromPending(true);
+        await createCapsuleFromChat(getContext().chat || [], true);
     });
 
     $("#amc_btn_history").on("click", () => {
@@ -412,7 +392,7 @@ function bindUiEvents() {
     });
 
     $("#amc_btn_reset").on("click", async () => {
-        if (!confirm("确定重置当前聊天的记忆压缩状态吗？这不会恢复已经被压缩掉的原始消息。")) {
+        if (!confirm("确定重置当前聊天的记忆胶囊状态吗？这不会删除原始聊天消息。")) {
             return;
         }
         const state = getChatState();
@@ -435,12 +415,6 @@ function renderRecord(record, index) {
             <div class="amc-record-summary">${escapeHtml(record.summary)}</div>
         </div>
     `;
-}
-
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = String(text ?? "");
-    return div.innerHTML;
 }
 
 function showHistoryModal() {
@@ -476,10 +450,10 @@ function showHistoryModal() {
     });
 
     $("#amc_modal_export").on("click", () => {
-        const state = getChatState();
-        if (!state.records.length) return;
-        let markdown = `# Auto Memory Capsule Export\n\n`;
-        for (const record of state.records) {
+        const recordsToExport = getChatState().records;
+        if (!recordsToExport.length) return;
+        let markdown = "# Auto Memory Capsule Export\n\n";
+        for (const record of recordsToExport) {
             markdown += `## #${record.seqStart}-${record.seqEnd}\n\n${record.summary}\n\n---\n\n`;
         }
         const blob = new Blob([markdown], { type: "text/markdown;charset=utf-8" });
@@ -490,26 +464,74 @@ function showHistoryModal() {
     });
 }
 
-function scheduleRefreshAndMaybeSummarize() {
+function scheduleRefresh() {
     if (scheduledRefresh) {
         clearTimeout(scheduledRefresh);
     }
-
-    scheduledRefresh = setTimeout(async () => {
+    scheduledRefresh = setTimeout(() => {
         refreshUi();
-        await createCapsuleFromPending(false);
-    }, 250);
+    }, 150);
 }
+
+function buildPromptWithCapsules(chat) {
+    if (!settings.compactEnabled) return;
+
+    const state = getChatState();
+    if (!state.records.length) return;
+
+    const records = [...state.records].sort((a, b) => a.seqStart - b.seqStart);
+    const transformed = [];
+    let logicalIndex = 0;
+    let recordIndex = 0;
+
+    for (const message of chat) {
+        if (!isCompressibleMessage(message)) {
+            transformed.push(message);
+            continue;
+        }
+
+        logicalIndex += 1;
+        const currentRecord = records[recordIndex];
+
+        if (currentRecord && logicalIndex === currentRecord.seqStart) {
+            transformed.push(makePromptCapsuleMessage(currentRecord));
+        }
+
+        if (currentRecord && logicalIndex >= currentRecord.seqStart && logicalIndex <= currentRecord.seqEnd) {
+            if (logicalIndex === currentRecord.seqEnd) {
+                recordIndex += 1;
+            }
+            continue;
+        }
+
+        transformed.push(message);
+    }
+
+    chat.splice(0, chat.length, ...transformed);
+}
+
+globalThis[INTERCEPTOR_NAME] = async function autoMemoryCapsuleInterceptor(chat, contextSize, abort, type) {
+    try {
+        settings = getSettings();
+
+        if (!settings.enabled) return;
+        if (summaryGenerationDepth > 0) return;
+        if (type === "quiet") return;
+
+        await createCapsuleFromChat(getContext().chat || [], false);
+        buildPromptWithCapsules(chat);
+    } catch (error) {
+        warn("Interceptor failed:", error);
+    }
+};
 
 async function mountUi() {
     if ($("#amc_root").length) return;
-
     const ctx = getContext();
     const html = await ctx.renderExtensionTemplateAsync(getExtensionFolder(), TEMPLATE_NAME, {
         title: "Auto Memory Capsule",
     });
-    const wrapped = `<div id="amc_root">${html}</div>`;
-    $("#extensions_settings2").append(wrapped);
+    $("#extensions_settings2").append(`<div id="amc_root">${html}</div>`);
     bindUiEvents();
     refreshUi();
 }
@@ -517,25 +539,20 @@ async function mountUi() {
 function bindEvents() {
     const ctx = getContext();
     const { eventSource, event_types } = ctx;
-    if (!eventSource || !event_types) {
-        warn("Event system unavailable, using passive UI only");
-        return;
-    }
-
-    eventSource.on(event_types.CHAT_CHANGED, () => {
-        refreshUi();
-    });
+    if (!eventSource || !event_types) return;
 
     for (const type of [
+        event_types.CHAT_CHANGED,
         event_types.MESSAGE_SENT,
         event_types.MESSAGE_RECEIVED,
         event_types.MESSAGE_EDITED,
-        event_types.MESSAGE_SWIPED,
         event_types.MESSAGE_DELETED,
+        event_types.MESSAGE_SWIPED,
+        event_types.GENERATION_ENDED,
     ]) {
         if (!type) continue;
         eventSource.on(type, () => {
-            scheduleRefreshAndMaybeSummarize();
+            scheduleRefresh();
         });
     }
 }
