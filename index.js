@@ -9,6 +9,7 @@ const DEFAULT_SETTINGS = Object.freeze({
     compactEnabled: true,
     threshold: 12,
     keepRecent: 6,
+    keepHead: 0,
     summaryStyle: "balanced",
     includePrevious: true,
     customPrompt: "",
@@ -163,7 +164,8 @@ function getLogicalMessageMap() {
 function getPendingRawMessages() {
     const state = getChatState();
     const { map, totalLogicalCount } = getLogicalMessageMap();
-    const pending = map.filter(item => item.logicalIndex > state.summarizedUntil);
+    const keepHead = Number(settings.keepHead || 0);
+    const pending = map.filter(item => item.logicalIndex > state.summarizedUntil && item.logicalIndex > keepHead);
     return {
         pending,
         totalLogicalCount,
@@ -347,6 +349,8 @@ function refreshUi() {
     $("#amc_threshold_value").text(settings.threshold);
     $("#amc_keep_recent").val(settings.keepRecent);
     $("#amc_keep_recent_value").text(settings.keepRecent);
+    $("#amc_keep_head").val(settings.keepHead);
+    $("#amc_keep_head_value").text(settings.keepHead);
     $("#amc_summary_style").val(settings.summaryStyle);
     $("#amc_include_previous").prop("checked", settings.includePrevious);
     $("#amc_custom_prompt").val(settings.customPrompt);
@@ -375,6 +379,13 @@ function bindUiEvents() {
         settings.keepRecent = Number(this.value) || DEFAULT_SETTINGS.keepRecent;
         $("#amc_keep_recent_value").text(settings.keepRecent);
         saveSettings();
+    });
+
+    $("#amc_keep_head").on("input", function () {
+        settings.keepHead = Number(this.value) || 0;
+        $("#amc_keep_head_value").text(settings.keepHead);
+        saveSettings();
+        refreshUi();
     });
 
     $("#amc_summary_style").on("change", function () {
