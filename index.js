@@ -371,6 +371,7 @@ function makePromptCapsuleMessage(record) {
  */
 async function createCapsuleFromChat(chat, force = false) {
     log("尝试创建记忆胶囊，force =", force);
+    return
     if (processing || !settings.enabled) return false;
 
     const { pending } = getPendingRawMessages(chat);
