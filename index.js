@@ -370,6 +370,7 @@ function makePromptCapsuleMessage(record) {
  * @returns {boolean} 是否成功生成
  */
 async function createCapsuleFromChat(chat, force = false) {
+    log("尝试创建记忆胶囊，force =", force);
     if (processing || !settings.enabled) return false;
 
     const { pending } = getPendingRawMessages(chat);
@@ -403,7 +404,7 @@ async function createCapsuleFromChat(chat, force = false) {
         const state = getChatState();
         const previousSummary = state.records.length ? state.records[state.records.length - 1].summary : "";
         const prompt = buildSummaryPrompt(recordInput, previousSummary, settings.summaryStyle);
-        log(LOG_PREFIX, "Generated summary prompt:", prompt);
+        log("Generated summary prompt:", prompt);
         const summary = await generateSummary(prompt);
 
         if (!summary) {
