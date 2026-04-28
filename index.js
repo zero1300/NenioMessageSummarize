@@ -376,7 +376,6 @@ async function createCapsuleFromChat(chat, force = false) {
 
     const { pending } = getPendingRawMessages(chat);
 
-    log(LOG_PREFIX, `Pending messages for summarization: ${pending.length}`, pending.map(p => `#${p.logicalIndex}`).join(", "));
     const threshold = Number(settings.threshold);
     const keepRecent = Number(settings.keepRecent);
     const eligibleCount = pending.length - keepRecent;
@@ -396,8 +395,7 @@ async function createCapsuleFromChat(chat, force = false) {
     if (targetCount <= 0) return false;
 
     const recordInput = pending.slice(0, targetCount);
-    log("recordInput: ", recordInput)
-    return
+    // log("recordInput: ", recordInput)
     if (!recordInput.length) return false;
 
     processing = true;
@@ -406,8 +404,11 @@ async function createCapsuleFromChat(chat, force = false) {
     try {
         const state = getChatState();
         const previousSummary = state.records.length ? state.records[state.records.length - 1].summary : "";
+        log("上一条胶囊摘要: ", previousSummary);
+        log("当前总结风格: ", settings.summaryStyle);
         const prompt = buildSummaryPrompt(recordInput, previousSummary, settings.summaryStyle);
-        log("Generated summary prompt:", prompt);
+        log("发送给 LLM 的提示词: ", prompt);
+        return
         const summary = await generateSummary(prompt);
 
         if (!summary) {
