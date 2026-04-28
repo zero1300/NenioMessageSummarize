@@ -268,11 +268,11 @@ function getPendingRawMessages(chat) {
 /**
  * 构建发送给 LLM 的总结提示词
  * @param {Array} recordInput - 待压缩的消息数组
- * @param {string} previousSummary - 上一条胶囊的内容（可选）
+ * @param {string} allSummaries - 所有胶囊的摘要内容（可选）
  * @param {string} style - 总结风格
  * @returns {string} 完整的提示词
  */
-function buildSummaryPrompt(recordInput, previousSummary, style) {
+function buildSummaryPrompt(recordInput, allSummaries, style) {
     const basePrompt = style === "custom" && settings.customPrompt.trim()
         ? settings.customPrompt.trim()
         : STYLE_PROMPTS[style] || STYLE_PROMPTS.balanced;
@@ -284,8 +284,8 @@ function buildSummaryPrompt(recordInput, previousSummary, style) {
         transcript += `#${item.logicalIndex} ${sender}: ${item.message.mes || ""}\n\n`;
     }
 
-    if (settings.includePrevious && previousSummary) {
-        transcript = `[上一条长期记忆]\n${previousSummary}\n\n[本次要压缩的新对话]\n${transcript}`;
+    if (settings.includePrevious && allSummaries) {
+        transcript = `[所有长期记忆]\n${allSummaries}\n\n[本次要压缩的新对话]\n${transcript}`;
     }
 
     return `${basePrompt}\n\n角色：${getCharacterName()}\n请压缩的消息范围：#${recordInput[0].logicalIndex} - #${recordInput[recordInput.length - 1].logicalIndex}\n\n${transcript}`;
@@ -403,10 +403,10 @@ async function createCapsuleFromChat(chat, force = false) {
 
     try {
         const state = getChatState();
-        const previousSummary = state.records.length ? state.records[state.records.length - 1].summary : "";
-        log("上一条胶囊摘要: ", previousSummary);
+        const allSummaries = state.records.map(r => r.summary).join("\n\n");
+        log("所有胶囊摘要: ", allSummaries);
         log("当前总结风格: ", settings.summaryStyle);
-        const prompt = buildSummaryPrompt(recordInput, previousSummary, settings.summaryStyle);
+        const prompt = buildSummaryPrompt(recordInput, allSummaries, settings.summaryStyle);
         log("发送给 LLM 的提示词: ", prompt);
         const summary = await generateSummary(prompt);
         if (!summary) {
