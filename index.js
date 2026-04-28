@@ -407,12 +407,15 @@ function bindUiEvents() {
 function renderRecord(record, index) {
     const time = new Date(record.createdAt).toLocaleString("zh-CN");
     return `
-        <div class="amc-record">
+        <div class="amc-record" data-record-id="${record.id}">
             <div class="amc-record-meta">
                 <span>#${index + 1} · ${time}</span>
                 <span>覆盖 #${record.seqStart} - #${record.seqEnd} · ${record.messageCount} 条</span>
             </div>
             <div class="amc-record-summary">${escapeHtml(record.summary)}</div>
+            <div class="amc-record-actions">
+                <button class="menu_button amc-btn-edit" data-record-id="${record.id}">编辑</button>
+            </div>
         </div>
     `;
 }
@@ -447,6 +450,55 @@ function showHistoryModal() {
         if (event.target === this) {
             modal.remove();
         }
+    });
+
+    modal.on("click", ".amc-btn-edit", function () {
+        const recordId = $(this).data("record-id");
+        const $record = $(this).closest(".amc-record");
+        const $summary = $record.find(".amc-record-summary");
+        const $actions = $record.find(".amc-record-actions");
+
+        const state = getChatState();
+        const record = state.records.find(r => r.id === recordId);
+        if (!record) return;
+
+        $summary.replaceWith(`<textarea class="amc-record-editor" rows="6">${escapeHtml(record.summary)}</textarea>`);
+        $actions.html(`
+            <button class="menu_button amc-btn-save" data-record-id="${recordId}">保存</button>
+            <button class="menu_button amc-btn-cancel" data-record-id="${recordId}">取消</button>
+        `);
+    });
+
+    modal.on("click", ".amc-btn-cancel", function () {
+        const recordId = $(this).data("record-id");
+        const $record = $(this).closest(".amc-record");
+        const state = getChatState();
+        const record = state.records.find(r => r.id === recordId);
+        if (!record) return;
+
+        $record.find(".amc-record-editor").replaceWith(`<div class="amc-record-summary">${escapeHtml(record.summary)}</div>`);
+        $record.find(".amc-record-actions").html(`<button class="menu_button amc-btn-edit" data-record-id="${recordId}">编辑</button>`);
+    });
+
+    modal.on("click", ".amc-btn-save", async function () {
+        const recordId = $(this).data("record-id");
+        const $record = $(this).closest(".amc-record");
+        const newSummary = $record.find(".amc-record-editor").val().trim();
+
+        if (!newSummary) {
+            alert("胶囊内容不能为空。");
+            return;
+        }
+
+        const state = getChatState();
+        const record = state.records.find(r => r.id === recordId);
+        if (!record) return;
+
+        record.summary = newSummary;
+        await saveChatMetadata();
+
+        $record.find(".amc-record-editor").replaceWith(`<div class="amc-record-summary">${escapeHtml(record.summary)}</div>`);
+        $record.find(".amc-record-actions").html(`<button class="menu_button amc-btn-edit" data-record-id="${recordId}">编辑</button>`);
     });
 
     $("#amc_modal_export").on("click", () => {

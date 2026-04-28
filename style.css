@@ -243,6 +243,37 @@
     word-break: break-word;
 }
 
+.amc-record-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.amc-record-actions .menu_button {
+    flex: 0;
+    min-width: 80px;
+}
+
+.amc-record-editor {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px;
+    border: 1px solid var(--SmartThemeQuoteColor, #6cacee);
+    border-radius: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(30, 30, 30, 0.84));
+    color: var(--SmartThemeBodyColor, #ddd);
+    font-size: 13px;
+    font-family: inherit;
+    line-height: 1.6;
+    resize: vertical;
+    outline: none;
+}
+
+.amc-record-editor:focus {
+    border-color: var(--SmartThemeQuoteColor, #88cbff);
+    box-shadow: 0 0 0 2px rgba(108, 172, 238, 0.25);
+}
+
 .amc-empty {
     padding: 28px 12px;
     color: var(--SmartThemeEmColor, #8d8d8d);
