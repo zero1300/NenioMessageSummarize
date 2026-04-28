@@ -1,9 +1,35 @@
+// ============================================================
+// Auto Memory Capsule（自动记忆胶囊）扩展
+// 功能：自动将较旧的对话压缩为记忆胶囊，节省上下文空间
+// 通过 generate_interceptor 机制在生成时替换旧消息为胶囊摘要
+// ============================================================
+
+// --------------- 常量定义 ---------------
+
+/** 模块名称，用于 storage 和 metadata 的 key */
 const MODULE_NAME = "auto_memory_capsule";
+/** 拦截器函数名，注册到 globalThis 上 */
 const INTERCEPTOR_NAME = "autoMemoryCapsuleInterceptor";
+/** 设置面板模板名称 */
 const TEMPLATE_NAME = "settings";
+/** 控制台日志前缀 */
 const LOG_PREFIX = "[AutoMemoryCapsule]";
+/** 胶囊消息标记前缀 */
 const MARKER_PREFIX = "【记忆胶囊】";
 
+// --------------- 默认配置 ---------------
+
+/**
+ * 默认设置，存储在 SillyTavern 的 extensionSettings 中
+ * @property {boolean} enabled - 是否启用自动压缩
+ * @property {boolean} compactEnabled - 是否在生成时用胶囊替换旧上下文
+ * @property {number} threshold - 每次归档的消息阈值
+ * @property {number} keepHead - 始终保留最开始的原始楼层数
+ * @property {number} keepRecent - 始终保留最近的原始楼层数
+ * @property {string} summaryStyle - 总结风格（brief/balanced/detailed/custom）
+ * @property {boolean} includePrevious - 总结时是否带上一条胶囊作为上下文
+ * @property {string} customPrompt - 自定义总结提示词
+ */
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
     compactEnabled: true,
@@ -15,26 +41,44 @@ const DEFAULT_SETTINGS = Object.freeze({
     customPrompt: "",
 });
 
+/**
+ * 三种预设总结风格的提示词
+ * brief: 简洁，保留关键事件和关系
+ * balanced: 平衡，保留事件、关系、目标、情绪
+ * detailed: 详细，保留所有可供续写的长期记忆信息
+ */
 const STYLE_PROMPTS = Object.freeze({
     brief: "请把以下对话压缩成一条非常简洁但信息完整的长期记忆。重点保留关键事件、人物关系、未完成目标和重要承诺。只输出总结正文。",
     balanced: "请把以下对话压缩成一条适合长期记忆的总结。保留关键事件、人物关系变化、正在推进的目标、情绪变化、线索和承诺。只输出总结正文。",
     detailed: "请详细总结以下对话，并保留可供后续续写使用的长期记忆信息，包括关键事件、人物关系变化、当前目标与障碍、伏笔秘密和承诺、当前场景状态。只输出总结正文。",
 });
 
+// --------------- 全局状态 ---------------
+
+/** 当前设置对象（从 extensionSettings 读取） */
 let settings = null;
+/** 是否已完成初始化 */
 let initialized = false;
+/** 是否正在处理胶囊生成（防止并发） */
 let processing = false;
+/** 防抖刷新定时器 */
 let scheduledRefresh = null;
+/** LLM 调用深度计数器（防止递归触发） */
 let summaryGenerationDepth = 0;
 
+// --------------- 工具函数 ---------------
+
+/** 带前缀的控制台日志输出 */
 function log(...args) {
     console.log(LOG_PREFIX, ...args);
 }
 
+/** 带前缀的控制台警告输出 */
 function warn(...args) {
     console.warn(LOG_PREFIX, ...args);
 }
 
+/** 获取 SillyTavern 上下文对象 */
 function getContext() {
     if (typeof SillyTavern === "undefined" || typeof SillyTavern.getContext !== "function") {
         throw new Error("SillyTavern context unavailable");
@@ -42,6 +86,10 @@ function getContext() {
     return SillyTavern.getContext();
 }
 
+/**
+ * 获取当前扩展的文件夹路径
+ * 用于加载 settings.html 模板
+ */
 function getExtensionFolder() {
     try {
         const path = new URL(import.meta.url).pathname;
@@ -54,12 +102,19 @@ function getExtensionFolder() {
     return "third-party/NenioMessageSummarize";
 }
 
+/** HTML 转义，防止 XSS */
 function escapeHtml(text) {
     const div = document.createElement("div");
     div.textContent = String(text ?? "");
     return div.innerHTML;
 }
 
+// --------------- 设置管理 ---------------
+
+/**
+ * 获取扩展设置，自动补全缺失的默认值
+ * @returns {object} 当前设置对象
+ */
 function getSettings() {
     const ctx = getContext();
     const extensionSettings = ctx.extensionSettings ?? ctx.extension_settings ?? window.extension_settings ?? {};
@@ -77,6 +132,7 @@ function getSettings() {
     return extensionSettings[MODULE_NAME];
 }
 
+/** 保存设置到 SillyTavern */
 function saveSettings() {
     const ctx = getContext();
     if (typeof ctx.saveSettingsDebounced === "function") {
@@ -86,6 +142,15 @@ function saveSettings() {
     }
 }
 
+// --------------- 聊天状态管理 ---------------
+
+/**
+ * 获取当前聊天的胶囊状态
+ * 存储在 chatMetadata["auto_memory_capsule"] 中
+ * @returns {object} { version, summarizedUntil, records }
+ *   - summarizedUntil: 已总结到的逻辑楼层号（该楼层之前的消息已被胶囊覆盖）
+ *   - records: 胶囊记录数组
+ */
 function getChatState() {
     const ctx = getContext();
     const meta = ctx.chatMetadata ?? window.chat_metadata ?? {};
@@ -105,6 +170,7 @@ function getChatState() {
     return meta[MODULE_NAME];
 }
 
+/** 保存聊天元数据（胶囊状态） */
 async function saveChatMetadata() {
     const ctx = getContext();
     if (typeof ctx.saveMetadata === "function") {
@@ -114,6 +180,12 @@ async function saveChatMetadata() {
     }
 }
 
+// --------------- 消息判断 ---------------
+
+/**
+ * 判断消息是否可被压缩
+ * 跳过系统消息和已存在的胶囊虚拟消息
+ */
 function isCompressibleMessage(message) {
     if (!message) return false;
     if (message.is_system) return false;
@@ -121,6 +193,9 @@ function isCompressibleMessage(message) {
     return true;
 }
 
+// --------------- 名称获取 ---------------
+
+/** 获取用户和角色名称 */
 function getPersonaNames() {
     const ctx = getContext();
     return {
@@ -129,6 +204,7 @@ function getPersonaNames() {
     };
 }
 
+/** 获取当前角色名称 */
 function getCharacterName() {
     const ctx = getContext();
     const characterId = ctx.characterId;
@@ -138,6 +214,16 @@ function getCharacterName() {
     return getPersonaNames().character;
 }
 
+// --------------- 逻辑楼层映射 ---------------
+
+/**
+ * 将真实 chat 数组映射为逻辑楼层索引
+ * 跳过系统消息和已有胶囊，只对可压缩消息编号
+ * @param {Array} chat - SillyTavern 的聊天消息数组
+ * @returns {{ map: Array, totalLogicalCount: number }}
+ *   map: [{ logicalIndex, actualIndex, message }]
+ *   totalLogicalCount: 可压缩消息总数
+ */
 function buildLogicalMap(chat) {
     const map = [];
     let logicalIndex = 0;
@@ -159,11 +245,16 @@ function buildLogicalMap(chat) {
     };
 }
 
+/**
+ * 获取待压缩的原始消息
+ * 排除已总结的和需要保留头部的消息
+ */
 function getPendingRawMessages(chat) {
     const state = getChatState();
     const { map, totalLogicalCount } = buildLogicalMap(chat);
     const keepHead = Number(settings.keepHead || 0);
     const pending = map.filter(item => item.logicalIndex > state.summarizedUntil && item.logicalIndex > keepHead);
+    console.log(LOG_PREFIX, "待合并的消息: ", pending);
     return {
         map,
         pending,
@@ -172,6 +263,15 @@ function getPendingRawMessages(chat) {
     };
 }
 
+// --------------- 总结提示词构建 ---------------
+
+/**
+ * 构建发送给 LLM 的总结提示词
+ * @param {Array} recordInput - 待压缩的消息数组
+ * @param {string} previousSummary - 上一条胶囊的内容（可选）
+ * @param {string} style - 总结风格
+ * @returns {string} 完整的提示词
+ */
 function buildSummaryPrompt(recordInput, previousSummary, style) {
     const basePrompt = style === "custom" && settings.customPrompt.trim()
         ? settings.customPrompt.trim()
@@ -191,6 +291,14 @@ function buildSummaryPrompt(recordInput, previousSummary, style) {
     return `${basePrompt}\n\n角色：${getCharacterName()}\n请压缩的消息范围：#${recordInput[0].logicalIndex} - #${recordInput[recordInput.length - 1].logicalIndex}\n\n${transcript}`;
 }
 
+// --------------- LLM 调用 ---------------
+
+/**
+ * 调用 SillyTavern 的 generateQuietPrompt 生成总结
+ * 使用 skipWIScan 跳过世界书扫描
+ * @param {string} prompt - 提示词
+ * @returns {string} LLM 返回的总结文本
+ */
 async function generateSummary(prompt) {
     const ctx = getContext();
     if (typeof ctx.generateQuietPrompt !== "function") {
@@ -200,13 +308,20 @@ async function generateSummary(prompt) {
     summaryGenerationDepth += 1;
     try {
         const result = await ctx.generateQuietPrompt({ quietPrompt: prompt, skipWIScan: true });
-        console.log(LOG_PREFIX, "chat ctx: ", result);
         return String(result || "").trim();
     } finally {
         summaryGenerationDepth = Math.max(0, summaryGenerationDepth - 1);
     }
 }
 
+// --------------- 胶囊记录操作 ---------------
+
+/**
+ * 创建胶囊记录对象
+ * @param {Array} recordInput - 被压缩的消息数组
+ * @param {string} summaryText - LLM 生成的总结文本
+ * @returns {object} 胶囊记录
+ */
 function makeRecord(recordInput, summaryText) {
     const first = recordInput[0];
     const last = recordInput[recordInput.length - 1];
@@ -221,6 +336,10 @@ function makeRecord(recordInput, summaryText) {
     };
 }
 
+/**
+ * 创建用于替换上下文的胶囊虚拟消息
+ * 在 generate_interceptor 中替换原始消息
+ */
 function makePromptCapsuleMessage(record) {
     return {
         name: "Memory Capsule",
@@ -239,19 +358,35 @@ function makePromptCapsuleMessage(record) {
     };
 }
 
+// --------------- 胶囊生成核心逻辑 ---------------
+
+/**
+ * 核心函数：从聊天中创建记忆胶囊
+ * 1. 检查是否有足够的消息需要压缩
+ * 2. 调用 LLM 生成总结
+ * 3. 保存胶囊记录到 chatState
+ * @param {Array} chat - SillyTavern 聊天数组
+ * @param {boolean} force - 是否强制生成（忽略阈值）
+ * @returns {boolean} 是否成功生成
+ */
 async function createCapsuleFromChat(chat, force = false) {
     if (processing || !settings.enabled) return false;
 
     const { pending } = getPendingRawMessages(chat);
+
+    console.log(LOG_PREFIX, `Pending messages for summarization: ${pending.length}`, pending.map(p => `#${p.logicalIndex}`).join(", "));
     const threshold = Number(settings.threshold);
     const keepRecent = Number(settings.keepRecent);
     const eligibleCount = pending.length - keepRecent;
 
+    // 非强制模式下，消息数不足则跳过
     if (!force && eligibleCount < threshold) {
         return false;
     }
 
+    // 强制模式下，尝试压缩所有可压缩消息
     let targetCount = force ? Math.max(0, eligibleCount) : threshold;
+    // 特殊情况：如果可压缩数不足但总消息数达到阈值，强制压缩全部
     if (force && pending.length > 0 && eligibleCount <= 0 && pending.length >= threshold) {
         targetCount = pending.length;
     }
@@ -268,6 +403,7 @@ async function createCapsuleFromChat(chat, force = false) {
         const state = getChatState();
         const previousSummary = state.records.length ? state.records[state.records.length - 1].summary : "";
         const prompt = buildSummaryPrompt(recordInput, previousSummary, settings.summaryStyle);
+        console.log(LOG_PREFIX, "Generated summary prompt:", prompt);
         const summary = await generateSummary(prompt);
 
         if (!summary) {
@@ -290,6 +426,14 @@ async function createCapsuleFromChat(chat, force = false) {
     }
 }
 
+// --------------- 胶囊回滚与重roll ---------------
+
+/**
+ * 回滚指定胶囊记录
+ * 删除胶囊并更新 summarizedUntil
+ * @param {string} recordId - 胶囊 ID
+ * @returns {boolean} 是否成功
+ */
 function rollbackCapsule(recordId) {
     const state = getChatState();
     const index = state.records.findIndex(r => r.id === recordId);
@@ -307,6 +451,12 @@ function rollbackCapsule(recordId) {
     return true;
 }
 
+/**
+ * 重roll指定胶囊
+ * 先回滚删除旧胶囊，再重新调用 LLM 生成新总结
+ * @param {string} recordId - 胶囊 ID
+ * @returns {boolean} 是否成功
+ */
 async function rerollCapsule(recordId) {
     const state = getChatState();
     const index = state.records.findIndex(r => r.id === recordId);
@@ -320,6 +470,12 @@ async function rerollCapsule(recordId) {
     return true;
 }
 
+// --------------- 统计信息 ---------------
+
+/**
+ * 计算当前聊天的胶囊统计信息
+ * @returns {object} { totalLogicalCount, pendingCount, capsuleCount, archivedCount, percent }
+ */
 function getStats() {
     const chat = getContext().chat || [];
     const state = getChatState();
@@ -336,6 +492,9 @@ function getStats() {
     };
 }
 
+// --------------- UI 更新 ---------------
+
+/** 设置状态栏文本和样式 */
 function setStatus(text, type = "") {
     const el = document.getElementById("amc_status");
     if (!el) return;
@@ -343,6 +502,7 @@ function setStatus(text, type = "") {
     el.className = "amc-status" + (type ? ` ${type}` : "");
 }
 
+/** 刷新设置面板的 UI 显示 */
 function refreshUi() {
     const stats = getStats();
 
@@ -366,25 +526,32 @@ function refreshUi() {
     $("#amc_custom_prompt").val(settings.customPrompt);
 }
 
+// --------------- UI 事件绑定 ---------------
+
+/** 绑定设置面板的所有 UI 控件事件 */
 function bindUiEvents() {
+    // 启用/禁用自动压缩
     $("#amc_enabled").on("change", function () {
         settings.enabled = this.checked;
         saveSettings();
         refreshUi();
     });
 
+    // 启用/禁用生成时替换上下文
     $("#amc_compact_enabled").on("change", function () {
         settings.compactEnabled = this.checked;
         saveSettings();
         refreshUi();
     });
 
+    // 每次归档的消息阈值
     $("#amc_threshold").on("input", function () {
         settings.threshold = Number(this.value) || DEFAULT_SETTINGS.threshold;
         $("#amc_threshold_value").text(settings.threshold);
         saveSettings();
     });
 
+    // 保留最开始的原始楼层数
     $("#amc_keep_head").on("input", function () {
         settings.keepHead = Number(this.value) || 0;
         $("#amc_keep_head_value").text(settings.keepHead);
@@ -392,6 +559,7 @@ function bindUiEvents() {
         refreshUi();
     });
 
+    // 保留最近的原始楼层数
     $("#amc_keep_recent").on("input", function () {
         settings.keepRecent = Number(this.value) || DEFAULT_SETTINGS.keepRecent;
         $("#amc_keep_recent_value").text(settings.keepRecent);
@@ -399,29 +567,35 @@ function bindUiEvents() {
         refreshUi();
     });
 
+    // 总结风格选择
     $("#amc_summary_style").on("change", function () {
         settings.summaryStyle = this.value;
         saveSettings();
     });
 
+    // 是否包含上一条胶囊作为上下文
     $("#amc_include_previous").on("change", function () {
         settings.includePrevious = this.checked;
         saveSettings();
     });
 
+    // 自定义总结提示词
     $("#amc_custom_prompt").on("input", function () {
         settings.customPrompt = this.value;
         saveSettings();
     });
 
+    // 立即生成按钮
     $("#amc_btn_run").on("click", async () => {
         await createCapsuleFromChat(getContext().chat || [], true);
     });
 
+    // 查看胶囊历史按钮
     $("#amc_btn_history").on("click", () => {
         showHistoryModal();
     });
 
+    // 重置当前聊天状态按钮
     $("#amc_btn_reset").on("click", async () => {
         if (!confirm("确定重置当前聊天的记忆胶囊状态吗？这不会删除原始聊天消息。")) {
             return;
@@ -435,6 +609,12 @@ function bindUiEvents() {
     });
 }
 
+// --------------- 胶囊历史弹窗 ---------------
+
+/**
+ * 渲染单条胶囊记录的 HTML
+ * 包含元信息、摘要内容和操作按钮
+ */
 function renderRecord(record, index) {
     const time = new Date(record.createdAt).toLocaleString("zh-CN");
     return `
@@ -453,6 +633,10 @@ function renderRecord(record, index) {
     `;
 }
 
+/**
+ * 显示胶囊历史弹窗
+ * 支持查看、编辑、重roll、回滚和导出功能
+ */
 function showHistoryModal() {
     $(".amc-modal-overlay").remove();
     const records = getChatState().records;
@@ -478,13 +662,16 @@ function showHistoryModal() {
 
     $("body").append(modal);
 
+    // 关闭按钮
     $("#amc_modal_close").on("click", () => modal.remove());
+    // 点击遮罩层关闭
     modal.on("click", function (event) {
         if (event.target === this) {
             modal.remove();
         }
     });
 
+    // 编辑按钮：将摘要替换为 textarea
     modal.on("click", ".amc-btn-edit", function () {
         const recordId = $(this).data("record-id");
         const $record = $(this).closest(".amc-record");
@@ -502,6 +689,7 @@ function showHistoryModal() {
         `);
     });
 
+    // 取消编辑：恢复原始显示
     modal.on("click", ".amc-btn-cancel", function () {
         const recordId = $(this).data("record-id");
         const $record = $(this).closest(".amc-record");
@@ -517,6 +705,7 @@ function showHistoryModal() {
         `);
     });
 
+    // 保存编辑：更新胶囊摘要并持久化
     modal.on("click", ".amc-btn-save", async function () {
         const recordId = $(this).data("record-id");
         const $record = $(this).closest(".amc-record");
@@ -542,6 +731,7 @@ function showHistoryModal() {
         `);
     });
 
+    // 回滚按钮：删除胶囊，恢复原始消息到待压缩状态
     modal.on("click", ".amc-btn-rollback", async function () {
         const recordId = $(this).data("record-id");
         const $record = $(this).closest(".amc-record");
@@ -560,6 +750,7 @@ function showHistoryModal() {
         }
     });
 
+    // 重roll按钮：删除旧胶囊并重新调用 LLM 生成新总结
     modal.on("click", ".amc-btn-reroll", async function () {
         const recordId = $(this).data("record-id");
         const $record = $(this).closest(".amc-record");
@@ -574,6 +765,7 @@ function showHistoryModal() {
         showHistoryModal();
     });
 
+    // 导出按钮：将所有胶囊导出为 Markdown 文件
     $("#amc_modal_export").on("click", () => {
         const recordsToExport = getChatState().records;
         if (!recordsToExport.length) return;
@@ -589,6 +781,9 @@ function showHistoryModal() {
     });
 }
 
+// --------------- 防抖刷新 ---------------
+
+/** 防抖刷新 UI，避免频繁更新 */
 function scheduleRefresh() {
     if (scheduledRefresh) {
         clearTimeout(scheduledRefresh);
@@ -598,6 +793,14 @@ function scheduleRefresh() {
     }, 150);
 }
 
+// --------------- 上下文替换（拦截器核心） ---------------
+
+/**
+ * 在生成时用胶囊消息替换 chat 数组中的旧消息
+ * 这是 generate_interceptor 的核心逻辑
+ * 直接 splice 修改传入的 chat 数组
+ * @param {Array} chat - SillyTavern 传入的聊天数组引用
+ */
 function buildPromptWithCapsules(chat) {
     if (!settings.compactEnabled) return;
 
@@ -618,10 +821,12 @@ function buildPromptWithCapsules(chat) {
         logicalIndex += 1;
         const currentRecord = records[recordIndex];
 
+        // 到达胶囊起始位置，插入胶囊虚拟消息
         if (currentRecord && logicalIndex === currentRecord.seqStart) {
             transformed.push(makePromptCapsuleMessage(currentRecord));
         }
 
+        // 跳过被胶囊覆盖的消息
         if (currentRecord && logicalIndex >= currentRecord.seqStart && logicalIndex <= currentRecord.seqEnd) {
             if (logicalIndex === currentRecord.seqEnd) {
                 recordIndex += 1;
@@ -635,6 +840,13 @@ function buildPromptWithCapsules(chat) {
     chat.splice(0, chat.length, ...transformed);
 }
 
+// --------------- 拦截器入口 ---------------
+
+/**
+ * SillyTavern 的 generate_interceptor
+ * 在每次生成时触发，负责替换上下文中的旧消息为胶囊
+ * 注意：胶囊生成（LLM 调用）已移到 onGenerationEnded 中
+ */
 globalThis[INTERCEPTOR_NAME] = async function autoMemoryCapsuleInterceptor(chat, contextSize, abort, type) {
     try {
         settings = getSettings();
@@ -649,6 +861,13 @@ globalThis[INTERCEPTOR_NAME] = async function autoMemoryCapsuleInterceptor(chat,
     }
 };
 
+// --------------- 生成完成后回调 ---------------
+
+/**
+ * 在回复完成后检查是否需要生成新胶囊
+ * 通过 GENERATION_ENDED 事件触发
+ * 避免在生成过程中调用 LLM 导致递归
+ */
 async function onGenerationEnded() {
     try {
         settings = getSettings();
@@ -661,6 +880,9 @@ async function onGenerationEnded() {
     }
 }
 
+// --------------- UI 挂载 ---------------
+
+/** 挂载设置面板到 SillyTavern 界面 */
 async function mountUi() {
     if ($("#amc_root").length) return;
     const ctx = getContext();
@@ -672,11 +894,19 @@ async function mountUi() {
     refreshUi();
 }
 
+// --------------- 事件绑定 ---------------
+
+/**
+ * 绑定 SillyTavern 事件监听
+ * 监听聊天变化、消息编辑/删除等事件来刷新 UI
+ * 监听 GENERATION_ENDED 事件来触发胶囊生成
+ */
 function bindEvents() {
     const ctx = getContext();
     const { eventSource, event_types } = ctx;
     if (!eventSource || !event_types) return;
 
+    // 刷新 UI 的事件
     for (const type of [
         event_types.CHAT_CHANGED,
         event_types.MESSAGE_SENT,
@@ -691,6 +921,7 @@ function bindEvents() {
         });
     }
 
+    // 生成完成后：刷新 UI + 检查是否需要生成胶囊
     if (event_types.GENERATION_ENDED) {
         eventSource.on(event_types.GENERATION_ENDED, () => {
             scheduleRefresh();
@@ -699,6 +930,9 @@ function bindEvents() {
     }
 }
 
+// --------------- 初始化 ---------------
+
+/** 扩展初始化：加载设置、挂载 UI、绑定事件 */
 async function bootstrap() {
     if (initialized) return;
     settings = getSettings();
@@ -709,6 +943,10 @@ async function bootstrap() {
     log("Initialized");
 }
 
+/**
+ * 注册生命周期钩子
+ * 优先监听 APP_READY 事件，降级使用 setTimeout
+ */
 function registerLifecycle() {
     try {
         const ctx = getContext();
@@ -727,4 +965,5 @@ function registerLifecycle() {
     }, 0);
 }
 
+// 启动扩展
 registerLifecycle();
