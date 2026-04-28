@@ -199,7 +199,7 @@ async function generateSummary(prompt) {
 
     summaryGenerationDepth += 1;
     try {
-        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt });
+        const result = await ctx.generateQuietPrompt({ quietPrompt: prompt, skipWIScan: true });
         return String(result || "").trim();
     } finally {
         summaryGenerationDepth = Math.max(0, summaryGenerationDepth - 1);
