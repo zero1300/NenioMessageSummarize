@@ -48,9 +48,9 @@ const DEFAULT_SETTINGS = Object.freeze({
  * detailed: 详细，保留所有可供续写的长期记忆信息
  */
 const STYLE_PROMPTS = Object.freeze({
-    brief: "请把以下对话压缩成一条非常简洁但信息完整的长期记忆。重点保留关键事件、人物关系、未完成目标和重要承诺。只输出总结正文。",
+    brief: "请将下面消息楼层进行总结，按时间或逻辑顺序保留关键信息，省略冗余描述",
     balanced: "请把以下对话压缩成一条适合长期记忆的总结。保留关键事件、人物关系变化、正在推进的目标、情绪变化、线索和承诺。只输出总结正文。",
-    detailed: "请详细总结以下对话，并保留可供后续续写使用的长期记忆信息，包括关键事件、人物关系变化、当前目标与障碍、伏笔秘密和承诺、当前场景状态。只输出总结正文。",
+    detailed: "请详细总结以下对话，并保留可供后续续写使用的长期记忆信息，包括关键事件、人物关系变化、当前目标与障碍、伏笔秘密和承诺、当前场景状态。只输出总结正文。", 
 });
 
 // --------------- 全局状态 ---------------
@@ -408,13 +408,10 @@ async function createCapsuleFromChat(chat, force = false) {
         log("当前总结风格: ", settings.summaryStyle);
         const prompt = buildSummaryPrompt(recordInput, previousSummary, settings.summaryStyle);
         log("发送给 LLM 的提示词: ", prompt);
-        return
         const summary = await generateSummary(prompt);
-
         if (!summary) {
             throw new Error("模型返回了空总结");
         }
-
         const record = makeRecord(recordInput, summary);
         state.records.push(record);
         state.summarizedUntil = record.seqEnd;
