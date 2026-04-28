@@ -254,7 +254,7 @@ function getPendingRawMessages(chat) {
     const { map, totalLogicalCount } = buildLogicalMap(chat);
     const keepHead = Number(settings.keepHead || 0);
     const pending = map.filter(item => item.logicalIndex > state.summarizedUntil && item.logicalIndex > keepHead);
-    console.log(LOG_PREFIX, "待合并的消息: ", pending);
+    log("待合并的消息: ", pending);
     return {
         map,
         pending,
@@ -374,7 +374,7 @@ async function createCapsuleFromChat(chat, force = false) {
 
     const { pending } = getPendingRawMessages(chat);
 
-    console.log(LOG_PREFIX, `Pending messages for summarization: ${pending.length}`, pending.map(p => `#${p.logicalIndex}`).join(", "));
+    log(LOG_PREFIX, `Pending messages for summarization: ${pending.length}`, pending.map(p => `#${p.logicalIndex}`).join(", "));
     const threshold = Number(settings.threshold);
     const keepRecent = Number(settings.keepRecent);
     const eligibleCount = pending.length - keepRecent;
@@ -403,7 +403,7 @@ async function createCapsuleFromChat(chat, force = false) {
         const state = getChatState();
         const previousSummary = state.records.length ? state.records[state.records.length - 1].summary : "";
         const prompt = buildSummaryPrompt(recordInput, previousSummary, settings.summaryStyle);
-        console.log(LOG_PREFIX, "Generated summary prompt:", prompt);
+        log(LOG_PREFIX, "Generated summary prompt:", prompt);
         const summary = await generateSummary(prompt);
 
         if (!summary) {

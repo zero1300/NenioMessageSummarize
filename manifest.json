@@ -9,7 +9,7 @@
     "css": "style.css",
     "generate_interceptor": "autoMemoryCapsuleInterceptor",
     "author": "MiMo + Codex rewrite",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "homePage": "",
     "update": ""
 }
