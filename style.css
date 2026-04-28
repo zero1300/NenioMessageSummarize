@@ -254,6 +254,22 @@
     min-width: 80px;
 }
 
+.amc-btn-reroll {
+    background: var(--SmartThemeQuoteColor, #6cacee) !important;
+    color: #fff !important;
+}
+
+.amc-btn-rollback {
+    background: #e37171 !important;
+    color: #fff !important;
+}
+
+.amc-reroll-status {
+    color: var(--SmartThemeEmColor, #8d8d8d);
+    font-size: 12px;
+    font-style: italic;
+}
+
 .amc-record-editor {
     width: 100%;
     box-sizing: border-box;

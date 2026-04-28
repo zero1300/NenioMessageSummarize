@@ -289,6 +289,36 @@ async function createCapsuleFromChat(chat, force = false) {
     }
 }
 
+function rollbackCapsule(recordId) {
+    const state = getChatState();
+    const index = state.records.findIndex(r => r.id === recordId);
+    if (index === -1) return false;
+
+    state.records.splice(index, 1);
+
+    if (state.records.length > 0) {
+        const lastRecord = state.records[state.records.length - 1];
+        state.summarizedUntil = lastRecord.seqEnd;
+    } else {
+        state.summarizedUntil = 0;
+    }
+
+    return true;
+}
+
+async function rerollCapsule(recordId) {
+    const state = getChatState();
+    const index = state.records.findIndex(r => r.id === recordId);
+    if (index === -1) return false;
+
+    rollbackCapsule(recordId);
+    await saveChatMetadata();
+    refreshUi();
+
+    await createCapsuleFromChat(getContext().chat || [], true);
+    return true;
+}
+
 function getStats() {
     const chat = getContext().chat || [];
     const state = getChatState();
@@ -415,6 +445,8 @@ function renderRecord(record, index) {
             <div class="amc-record-summary">${escapeHtml(record.summary)}</div>
             <div class="amc-record-actions">
                 <button class="menu_button amc-btn-edit" data-record-id="${record.id}">编辑</button>
+                <button class="menu_button amc-btn-reroll" data-record-id="${record.id}">重roll</button>
+                <button class="menu_button amc-btn-rollback" data-record-id="${record.id}">回滚</button>
             </div>
         </div>
     `;
@@ -477,7 +509,11 @@ function showHistoryModal() {
         if (!record) return;
 
         $record.find(".amc-record-editor").replaceWith(`<div class="amc-record-summary">${escapeHtml(record.summary)}</div>`);
-        $record.find(".amc-record-actions").html(`<button class="menu_button amc-btn-edit" data-record-id="${recordId}">编辑</button>`);
+        $record.find(".amc-record-actions").html(`
+            <button class="menu_button amc-btn-edit" data-record-id="${recordId}">编辑</button>
+            <button class="menu_button amc-btn-reroll" data-record-id="${recordId}">重roll</button>
+            <button class="menu_button amc-btn-rollback" data-record-id="${recordId}">回滚</button>
+        `);
     });
 
     modal.on("click", ".amc-btn-save", async function () {
@@ -498,7 +534,43 @@ function showHistoryModal() {
         await saveChatMetadata();
 
         $record.find(".amc-record-editor").replaceWith(`<div class="amc-record-summary">${escapeHtml(record.summary)}</div>`);
-        $record.find(".amc-record-actions").html(`<button class="menu_button amc-btn-edit" data-record-id="${recordId}">编辑</button>`);
+        $record.find(".amc-record-actions").html(`
+            <button class="menu_button amc-btn-edit" data-record-id="${recordId}">编辑</button>
+            <button class="menu_button amc-btn-reroll" data-record-id="${recordId}">重roll</button>
+            <button class="menu_button amc-btn-rollback" data-record-id="${recordId}">回滚</button>
+        `);
+    });
+
+    modal.on("click", ".amc-btn-rollback", async function () {
+        const recordId = $(this).data("record-id");
+        const $record = $(this).closest(".amc-record");
+
+        if (!confirm("确定回滚这条记忆胶囊吗？胶囊将被删除，原始消息将恢复到待压缩状态。")) {
+            return;
+        }
+
+        if (!rollbackCapsule(recordId)) return;
+        await saveChatMetadata();
+        refreshUi();
+        $record.remove();
+
+        if (!getChatState().records.length) {
+            modal.find(".amc-modal-body").html(`<div class="amc-empty">当前聊天还没有生成任何记忆胶囊。</div>`);
+        }
+    });
+
+    modal.on("click", ".amc-btn-reroll", async function () {
+        const recordId = $(this).data("record-id");
+        const $record = $(this).closest(".amc-record");
+
+        if (!confirm("确定重新roll这条记忆胶囊吗？将删除当前胶囊并重新生成。")) {
+            return;
+        }
+
+        $record.find(".amc-record-actions").html(`<span class="amc-reroll-status">正在重新生成...</span>`);
+        await rerollCapsule(recordId);
+        modal.remove();
+        showHistoryModal();
     });
 
     $("#amc_modal_export").on("click", () => {
@@ -570,12 +642,23 @@ globalThis[INTERCEPTOR_NAME] = async function autoMemoryCapsuleInterceptor(chat,
         if (summaryGenerationDepth > 0) return;
         if (type === "quiet") return;
 
-        await createCapsuleFromChat(getContext().chat || [], false);
         buildPromptWithCapsules(chat);
     } catch (error) {
         warn("Interceptor failed:", error);
     }
 };
+
+async function onGenerationEnded() {
+    try {
+        settings = getSettings();
+        if (!settings.enabled) return;
+        if (summaryGenerationDepth > 0) return;
+
+        await createCapsuleFromChat(getContext().chat || [], false);
+    } catch (error) {
+        warn("Post-generation capsule check failed:", error);
+    }
+}
 
 async function mountUi() {
     if ($("#amc_root").length) return;
@@ -600,11 +683,17 @@ function bindEvents() {
         event_types.MESSAGE_EDITED,
         event_types.MESSAGE_DELETED,
         event_types.MESSAGE_SWIPED,
-        event_types.GENERATION_ENDED,
     ]) {
         if (!type) continue;
         eventSource.on(type, () => {
             scheduleRefresh();
+        });
+    }
+
+    if (event_types.GENERATION_ENDED) {
+        eventSource.on(event_types.GENERATION_ENDED, () => {
+            scheduleRefresh();
+            onGenerationEnded();
         });
     }
 }
