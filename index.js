@@ -803,18 +803,50 @@ function scheduleRefresh() {
  * 直接 splice 修改传入的 chat 数组
  * @param {Array} chat - SillyTavern 传入的聊天数组引用
  */
+/**
+ * 遍历 chat 消息列表，用胶囊（capsule）虚拟消息替换已被摘要覆盖的消息
+ *
+ * 工作原理：
+ * 1. 从 ChatState 中获取所有摘要记录（records），按起始序号升序排列
+ * 2. 遍历 chat 中的每一条可压缩消息（user/assistant 等角色）
+ * 3. 为每个可压缩消息分配一个逻辑序号（跳过 system 等不可压缩消息）
+ * 4. 当逻辑序号到达某条记录的起始位置（seqStart）时，在消息列表中插入一个胶囊虚拟消息
+ * 5. 该胶囊虚拟消息代表从 seqStart 到 seqEnd 区间内所有消息的汇总
+ * 6. 跳过被胶囊覆盖的原始消息（seqStart ~ seqEnd 区间），仅保留胶囊消息
+ * 7. 未被任何摘要覆盖的消息保持原样保留
+ * 8. 最终将所有处理后的消息（保留的原始消息 + 胶囊虚拟消息）写回 chat 数组
+ *
+ * @param {Array} chat - SillyTavern 的 chat 消息数组，函数会直接修改它
+ */
 function buildPromptWithCapsules(chat) {
+    // 未启用紧凑模式则直接退出，不修改 chat
     if (!settings.compactEnabled) return;
 
     const state = getChatState();
+    // 没有摘要记录时无需处理
     if (!state.records.length) return;
 
+    // 按消息起始序号升序排列，确保按时间顺序处理摘要区间
     const records = [...state.records].sort((a, b) => a.seqStart - b.seqStart);
+
+    /** 最终输出的消息数组，包含保留的原始消息和胶囊虚拟消息 */
     const transformed = [];
+
+    /**
+     * logicalIndex - 可压缩消息的逻辑序号（从 1 开始）
+     * 只对 isCompressibleMessage 返回 true 的消息递增
+     * 例如 system 消息不递增，因为 system 消息不参与压缩
+     */
     let logicalIndex = 0;
+
+    /**
+     * recordIndex - 当前正在处理的摘要记录在 records 数组中的下标
+     * 当处理完一条记录覆盖的消息区间后（到达 seqEnd），切换到下一条记录
+     */
     let recordIndex = 0;
 
     for (const message of chat) {
+        // 不可压缩消息（如 system 角色）直接保留，不参与序号计算
         if (!isCompressibleMessage(message)) {
             transformed.push(message);
             continue;
@@ -823,22 +855,33 @@ function buildPromptWithCapsules(chat) {
         logicalIndex += 1;
         const currentRecord = records[recordIndex];
 
-        // 到达胶囊起始位置，插入胶囊虚拟消息
+        // 当逻辑序号到达当前摘要记录的起始位置时，在输出中插入胶囊虚拟消息
+        // 胶囊消息会携带该区间的摘要文本和索引范围，供 LLM 理解上下文
         if (currentRecord && logicalIndex === currentRecord.seqStart) {
             transformed.push(makePromptCapsuleMessage(currentRecord));
         }
 
-        // 跳过被胶囊覆盖的消息
+        // 如果当前消息落在当前摘要记录的覆盖区间内（seqStart ~ seqEnd），则跳过它
+        // 因为这段区间的内容已经被上面的胶囊虚拟消息所代表
         if (currentRecord && logicalIndex >= currentRecord.seqStart && logicalIndex <= currentRecord.seqEnd) {
+            // 到达该记录的结束位置，切换到下一条摘要记录
             if (logicalIndex === currentRecord.seqEnd) {
                 recordIndex += 1;
             }
             continue;
         }
 
+        // 不在任何摘要区间内的消息，正常保留
         transformed.push(message);
     }
 
+    log("原始 chat 消息数:", chat.length);
+    log("处理后的消息数（包含胶囊虚拟消息）:", transformed.length);
+    log("当前摘要记录数:", records.length);
+    log("当前摘要记录详情:", records);
+    log("最终构建的消息列表:", transformed);
+
+    // 原地替换 chat 数组内容，SilLyTavern 后续会使用这个修改后的数组构建 prompt
     chat.splice(0, chat.length, ...transformed);
 }
 
