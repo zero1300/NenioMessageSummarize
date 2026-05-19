@@ -87,6 +87,29 @@
                     <textarea id="amc_custom_prompt" rows="4" placeholder="例如：请重点总结角色关系变化、关键承诺、当前目标与潜在冲突。"></textarea>
                 </div>
 
+                <hr class="amc-divider" />
+                <div class="amc-section-title">自定义 LLM API（可选）</div>
+
+                <div class="amc-row">
+                    <label for="amc_use_custom_api">启用自定义 API</label>
+                    <input id="amc_use_custom_api" type="checkbox" />
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_custom_api_endpoint">API 地址</label>
+                    <input id="amc_custom_api_endpoint" type="text" placeholder="例如：https://api.openai.com/v1" />
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_custom_api_key">API Key</label>
+                    <input id="amc_custom_api_key" type="password" placeholder="sk-..." />
+                </div>
+
+                <div class="amc-field">
+                    <label for="amc_custom_api_model">模型名称</label>
+                    <input id="amc_custom_api_model" type="text" placeholder="例如：gpt-4o-mini" />
+                </div>
+
                 <div class="amc-actions">
                     <button id="amc_btn_run" class="menu_button">立即生成一条新胶囊</button>
                     <button id="amc_btn_history" class="menu_button">查看胶囊历史</button>

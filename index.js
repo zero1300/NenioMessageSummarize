@@ -29,6 +29,10 @@ const MARKER_PREFIX = "【记忆胶囊】";
  * @property {string} summaryStyle - 总结风格（brief/balanced/detailed/custom）
  * @property {boolean} includePrevious - 总结时是否带上一条胶囊作为上下文
  * @property {string} customPrompt - 自定义总结提示词
+ * @property {boolean} useCustomApi - 是否使用自定义 API
+ * @property {string} customApiEndpoint - 自定义 API 地址
+ * @property {string} customApiKey - 自定义 API Key
+ * @property {string} customApiModel - 自定义 API 模型名称
  */
 const DEFAULT_SETTINGS = Object.freeze({
     enabled: true,
@@ -39,6 +43,10 @@ const DEFAULT_SETTINGS = Object.freeze({
     summaryStyle: "balanced",
     includePrevious: true,
     customPrompt: "",
+    useCustomApi: false,
+    customApiEndpoint: "",
+    customApiKey: "",
+    customApiModel: "",
 });
 
 /**
@@ -301,18 +309,54 @@ function buildSummaryPrompt(recordInput, allSummaries, style) {
  * @returns {string} LLM 返回的总结文本
  */
 async function generateSummary(prompt) {
-    const ctx = getContext();
-    if (typeof ctx.generateQuietPrompt !== "function") {
-        throw new Error("generateQuietPrompt unavailable");
-    }
-
     summaryGenerationDepth += 1;
     try {
+        if (settings.useCustomApi && settings.customApiEndpoint && settings.customApiKey && settings.customApiModel) {
+            return await generateSummaryViaCustomApi(prompt);
+        }
+
+        const ctx = getContext();
+        if (typeof ctx.generateQuietPrompt !== "function") {
+            throw new Error("generateQuietPrompt unavailable");
+        }
         const result = await ctx.generateQuietPrompt({ quietPrompt: prompt, skipWIScan: true });
         return String(result || "").trim();
     } finally {
         summaryGenerationDepth = Math.max(0, summaryGenerationDepth - 1);
     }
+}
+
+async function generateSummaryViaCustomApi(prompt) {
+    let endpoint = settings.customApiEndpoint.replace(/\/+$/, "");
+    if (!endpoint.endsWith("/chat/completions")) {
+        endpoint += "/chat/completions";
+    }
+
+    const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${settings.customApiKey}`,
+        },
+        body: JSON.stringify({
+            model: settings.customApiModel,
+            messages: [{ role: "user", content: prompt }],
+            temperature: 0.3,
+            stream: false,
+        }),
+    });
+
+    if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        throw new Error(`API error ${response.status}: ${errorText}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content;
+    if (!content) {
+        throw new Error("API response missing content");
+    }
+    return String(content).trim();
 }
 
 // --------------- 胶囊记录操作 ---------------
@@ -527,6 +571,10 @@ function refreshUi() {
     $("#amc_summary_style").val(settings.summaryStyle);
     $("#amc_include_previous").prop("checked", settings.includePrevious);
     $("#amc_custom_prompt").val(settings.customPrompt);
+    $("#amc_use_custom_api").prop("checked", settings.useCustomApi);
+    $("#amc_custom_api_endpoint").val(settings.customApiEndpoint);
+    $("#amc_custom_api_key").val(settings.customApiKey);
+    $("#amc_custom_api_model").val(settings.customApiModel);
 }
 
 // --------------- UI 事件绑定 ---------------
@@ -585,6 +633,30 @@ function bindUiEvents() {
     // 自定义总结提示词
     $("#amc_custom_prompt").on("input", function () {
         settings.customPrompt = this.value;
+        saveSettings();
+    });
+
+    // 启用自定义 API
+    $("#amc_use_custom_api").on("change", function () {
+        settings.useCustomApi = this.checked;
+        saveSettings();
+    });
+
+    // 自定义 API 地址
+    $("#amc_custom_api_endpoint").on("input", function () {
+        settings.customApiEndpoint = this.value;
+        saveSettings();
+    });
+
+    // 自定义 API Key
+    $("#amc_custom_api_key").on("input", function () {
+        settings.customApiKey = this.value;
+        saveSettings();
+    });
+
+    // 自定义 API 模型名称
+    $("#amc_custom_api_model").on("input", function () {
+        settings.customApiModel = this.value;
         saveSettings();
     });
 
